@@ -12,6 +12,8 @@ namespace Si_VersusVote
         [JsonProperty("utc")] public string Utc = "";
         [JsonProperty("map")] public string Map = "";
         [JsonProperty("mode")] public string Mode = "";
+        /// <summary>An HvHvA round played as 2v1 (Sol + Centauri allied vs Aliens); counts toward the HvHvA ceiling.</summary>
+        [JsonProperty("two_vs_one", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool TwoVsOne;
 
         [JsonIgnore] public GameModeExt.ETeamsVersus Parsed
             => Modes.TryParse(Mode, out var m) ? m : GameModeExt.ETeamsVersus.NONE;
@@ -50,14 +52,25 @@ namespace Si_VersusVote
             }
         }
 
-        public static void Add(string map, GameModeExt.ETeamsVersus mode)
+        public static void Add(string map, GameModeExt.ETeamsVersus mode, bool twoVsOne)
         {
             _data.Rounds.Add(new RoundEntry
             {
                 Utc = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
                 Map = map ?? "",
                 Mode = Modes.Short(mode),
+                TwoVsOne = twoVsOne && mode == GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS,
             });
+            Save();
+        }
+
+        /// <summary>2v1 withdrawn after the round was recorded (Si_Alliance refused): clear the flag on the last entry.</summary>
+        public static void ClearLastTwoVsOne()
+        {
+            if (_data.Rounds.Count == 0) return;
+            var last = _data.Rounds[_data.Rounds.Count - 1];
+            if (!last.TwoVsOne) return;
+            last.TwoVsOne = false;
             Save();
         }
 
@@ -87,8 +100,12 @@ namespace Si_VersusVote
         }
 
         /// <summary>Count per mode over the last <paramref name="window"/> rounds (all maps). <paramref name="seen"/> = rounds actually in the window.</summary>
-        public static Dictionary<GameModeExt.ETeamsVersus, int> WindowCounts(int window, out int seen)
+        public static Dictionary<GameModeExt.ETeamsVersus, int> WindowCounts(int window, out int seen) => WindowCounts(window, out seen, out _);
+
+        /// <summary>Same, plus the 2v1 rounds in the window (they are also counted as HvHvA).</summary>
+        public static Dictionary<GameModeExt.ETeamsVersus, int> WindowCounts(int window, out int seen, out int twoVsOne)
         {
+            twoVsOne = 0;
             var counts = new Dictionary<GameModeExt.ETeamsVersus, int>();
             foreach (var m in Modes.All) counts[m] = 0;
             int start = Math.Max(0, _data.Rounds.Count - window);
@@ -97,6 +114,7 @@ namespace Si_VersusVote
             {
                 var m = _data.Rounds[i].Parsed;
                 if (counts.ContainsKey(m)) counts[m]++;
+                if (_data.Rounds[i].TwoVsOne) twoVsOne++;
             }
             return counts;
         }

@@ -6,11 +6,16 @@
  when the result is not allowed, re-tallies the same votes over the allowed layouts only and swaps the argument.
  The layout buttons are baked into the client prefab, so a blocked layout stays clickable; players are told in chat.
 
-   !layout | !versus            status: counted / not counted this round, counts in the window
-   !versus stats                shares from the whole history (all maps + per map)
-   !versus reload | reset       admin (Power.Generic): reload config, clear history (old file kept as .bak)
+ 2v1 (0.2.0): on maps listed in map_two_vs_one the 3-way button (HvHvA) is played as Sol + Centauri allied against the
+ Aliens: the vanilla HvHvA layout is applied and Si_Alliance (AllianceApi.ForceAlliance, by reflection) locks the two
+ human teams together for the round. Other mods read VersusApi.TwoVsOneActive (VersusApi.cs).
 
- Config + history: UserData/cfg/VersusVote/. Chat commands need the Admin Mod; the filter itself does not.
+   !layout | !versus            status: counted / not counted this round, counts in the window, 2v1 state
+   !versus stats                shares from the whole history (all maps + per map, 2v1 separately)
+   !versus set | block | mapblock | 2v1 | save | reload | reset    admin (Power.Generic), see Commands.cs / Edit.cs
+
+ Si_ModUI page: VersusModUI.ModUIData() (ModUI.cs). Config + history: UserData/cfg/VersusVote/. Chat commands need the
+ Admin Mod; the filter itself does not.
 */
 
 using System;
@@ -26,7 +31,7 @@ namespace Si_VersusVote
 {
     public class VersusVoteMod : MelonMod
     {
-        public const string Version = "0.1.0";
+        public const string Version = "0.2.0";
         internal const string Tag = "<color=#7FD4FF>[LAYOUT]</color> ";
         internal static VersusConfig Cfg = new VersusConfig();
 
@@ -59,6 +64,7 @@ namespace Si_VersusVote
         {
             if (sceneName == "Intro" || sceneName == "MainMenu" || sceneName == "Loading" || sceneName.Length < 2) return;
             _sceneName = sceneName;
+            VersusModUI.MarkDirty();
         }
 
         /// <summary>Current map in mapcycle.txt spelling: NetworkGameServer's map, else the last loaded scene.</summary>
@@ -74,6 +80,7 @@ namespace Si_VersusVote
             _wasInVote = false;   // a restart opens a fresh vote phase even if the state looked unchanged
             _announceAt = _repeatAt = -1f;
             _warned.Clear();
+            VersusModUI.MarkDirty();
         }
 
         internal static bool MarkWarned(Player p, GameModeExt.ETeamsVersus m)
@@ -87,6 +94,7 @@ namespace Si_VersusVote
 
         public override void OnUpdate()
         {
+            AllianceBridge.Tick();   // 2v1 alliance request after the layout postfix (one bool check otherwise)
             float now = Time.time;
             if (now < _nextPoll) return;
             _nextPoll = now + 0.5f;
@@ -129,17 +137,80 @@ namespace Si_VersusVote
             var ev = Rules.Evaluate(Cfg, map);
             string line = VoteOpenLine(ev);
             MelonLogger.Msg("[VERSUS] vote " + (repeat ? "reminder" : "open") + " on " + map + ": " + (line.Length > 0 ? line : "all layouts count") + " | " + ev.WindowText());
-            if (line.Length > 0) ToAll(line);   // nothing blocked = no chat line
+            if (line.Length > 0) ToAll(line);   // nothing blocked and no 2v1 = no chat line
         }
 
-        /// <summary>"Layout vote - counted this round: A, B. Not counted: C (reason)"; empty when every layout counts.</summary>
+        internal const string TwoVsOneHint = "3-way button = Sol+Centauri allied vs Aliens";
+
+        /// <summary>
+        /// "Layout vote - counted this round: A, B, 2v1 (3-way button = ...). Not counted: C (reason)". Empty when every
+        /// layout counts and the 3-way button means a normal 3-way.
+        /// </summary>
         internal static string VoteOpenLine(Evaluation ev)
         {
-            if (ev.FilterOff) return "";
+            var blocked = ev.BlockedVotable;   // empty when the filter is off
+            bool twoCounted = ev.TwoVsOne && ev.IsAllowed(GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS);
+            if (blocked.Count == 0 && !twoCounted) return "";
+            var counted = ev.AllowedVotable.Select(m => m == GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS && ev.TwoVsOne
+                                                        ? "2v1 (" + TwoVsOneHint + ")" : ev.Display(m)).ToList();
+            string line = "Layout vote - counted this round: " + (counted.Count == 0 ? "none" : string.Join(", ", counted));
+            if (blocked.Count > 0)
+                line += ". Not counted: " + string.Join(", ", blocked.Select(m => ev.Display(m) + " (" + ev.Reason(m) + ")"));
+            return line;
+        }
+
+        /// <summary>!versus status and the first lines of the ModUI page.</summary>
+        internal static List<string> StatusLines()
+        {
+            var lines = new List<string>();
+            string map = CurrentMap();
+            var ev = Rules.Evaluate(Cfg, map);
+            string head = "Map " + (map.Length > 0 ? map : "?") + " | ";
+            if (!Cfg.Enabled) head += "filter OFF (enabled=false) | ";
+            else if (ev.FilterOff) head += "blocklists exclude every layout: nothing filtered | ";
             var blocked = ev.BlockedVotable;
-            if (blocked.Count == 0) return "";
-            var why = blocked.Select(m => Modes.Display(m) + " (" + ev.Reason(m) + ")");
-            return "Layout vote - counted this round: " + Modes.JoinDisplay(ev.AllowedVotable) + ". Not counted: " + string.Join(", ", why);
+            string line = head + "counted: " + ev.JoinDisplay(ev.AllowedVotable);
+            if (blocked.Count > 0)
+                line += " | not counted: " + string.Join(", ", blocked.Select(m => ev.Display(m) + " (" + ev.Reason(m) + ")"));
+            lines.Add(line);
+            string w = ev.WindowText();
+            if (ev.CeilingIgnored) w += " (ceilings ignored this round: they would leave no layout)";
+            lines.Add(w);
+            lines.Add(TwoVsOneStatus(ev));
+            return lines;
+        }
+
+        /// <summary>"2v1 ACTIVE this round ..." / "2v1 map: 3-way button = ..." / "2v1 maps: IndustrialQuarter (not this map)".</summary>
+        internal static string TwoVsOneStatus(Evaluation ev)
+        {
+            string layout = VersusApi.LayoutShort;
+            if (VersusApi.TwoVsOneActive)
+                return "2v1 ACTIVE this round on " + ev.Map + ": Sol and Centauri allied against the Aliens" + (AllianceBridge.Pending ? " (alliance being set up)" : "");
+            string maps = Cfg.MapTwoVsOne.Count == 0 ? "none" : string.Join(", ", Cfg.MapTwoVsOne);
+            if (!ev.TwoVsOneMap)
+                return "2v1 maps: " + maps + " (not this map)" + (layout.Length > 0 ? " | layout this round: " + layout : "");
+            if (ev.AllianceMissing)
+                return "2v1 map, but Si_Alliance (AllianceApi) is not loaded: the 3-way button plays a normal 3-way" + (layout.Length > 0 ? " | layout this round: " + layout : "");
+            if (layout.Length > 0)
+                return "2v1 map | layout this round: " + layout + (layout == "HvHvA" ? " (2v1 withdrawn, normal 3-way)" : "");
+            return "2v1 map: " + TwoVsOneHint + (ev.IsAllowed(GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS) ? "" : " - but 3-way/2v1 is not counted this round (" + ev.Reason(GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS) + ")");
+        }
+
+        // ------------------------------------------------------------------ 2v1 outcome (AllianceBridge)
+
+        internal static void TwoVsOneApplied(string map)
+        {
+            ToAll("3-way on " + map + " is played as 2v1: Sol and Centauri are allied against the Aliens.");
+            VersusModUI.MarkDirty();
+        }
+
+        internal static void TwoVsOneFailed(string shortReason, string detail)
+        {
+            MelonLogger.Warning("[VERSUS] 2v1 withdrawn: " + detail);
+            VersusApi.Withdraw();
+            History.ClearLastTwoVsOne();
+            ToAll("2v1 unavailable (" + shortReason + ") - playing normal 3-way");
+            VersusModUI.MarkDirty();
         }
 
         // ------------------------------------------------------------------ chat

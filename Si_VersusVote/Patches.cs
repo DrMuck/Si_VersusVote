@@ -10,6 +10,7 @@ namespace Si_VersusVote
     /// Harmony patches on MP_Strategy (SilicaCore is Mono on the dedicated server; patched manually so one missing method
     /// never takes the others down):
     ///   prefix+postfix  public override void MP_Strategy.SetTeamVersusMode(GameModeExt.ETeamsVersus, bool preventSpawning = false)
+    ///                   (prefix with Priority.First: VersusApi.TwoVsOneActive is set before other mods' prefixes read it)
     ///   prefix          protected void MP_Strategy.RPC_VoteTeamVersus(Player, GameModeExt.ETeamsVersus)
     ///   postfix         public override void MP_Strategy.Restart()
     /// </summary>
@@ -21,20 +22,26 @@ namespace Si_VersusVote
         {
             var tv = typeof(GameModeExt.ETeamsVersus);
             Patch(harmony, AccessTools.DeclaredMethod(typeof(MP_Strategy), "SetTeamVersusMode", new[] { tv, typeof(bool) }),
-                  nameof(Prefix_SetTeamVersusMode), nameof(Postfix_SetTeamVersusMode), "MP_Strategy.SetTeamVersusMode(ETeamsVersus, bool)");
+                  nameof(Prefix_SetTeamVersusMode), nameof(Postfix_SetTeamVersusMode), "MP_Strategy.SetTeamVersusMode(ETeamsVersus, bool)", Priority.First);
             Patch(harmony, AccessTools.DeclaredMethod(typeof(MP_Strategy), "RPC_VoteTeamVersus", new[] { typeof(Player), tv }),
                   nameof(Prefix_RPC_VoteTeamVersus), null, "MP_Strategy.RPC_VoteTeamVersus(Player, ETeamsVersus)");
             Patch(harmony, AccessTools.DeclaredMethod(typeof(MP_Strategy), "Restart", Type.EmptyTypes),
                   null, nameof(Postfix_Restart), "MP_Strategy.Restart()");
         }
 
-        static void Patch(HarmonyLib.Harmony harmony, MethodInfo? target, string? prefix, string? postfix, string label)
+        static void Patch(HarmonyLib.Harmony harmony, MethodInfo? target, string? prefix, string? postfix, string label, int prefixPriority = -1)
         {
             if (target == null) { MelonLogger.Error("[VERSUS] " + label + " not found: that part of Si_VersusVote is inactive"); return; }
             try
             {
+                HarmonyMethod? pre = null;
+                if (prefix != null)
+                {
+                    pre = new HarmonyMethod(typeof(Patches), prefix);
+                    if (prefixPriority >= 0) pre.priority = prefixPriority;
+                }
                 harmony.Patch(target,
-                    prefix: prefix != null ? new HarmonyMethod(typeof(Patches), prefix) : null,
+                    prefix: pre,
                     postfix: postfix != null ? new HarmonyMethod(typeof(Patches), postfix) : null);
                 VersusVoteMod.Debug("patched " + label);
             }
@@ -56,44 +63,73 @@ namespace Si_VersusVote
 
         // ------------------------------------------------------------------ SetTeamVersusMode
 
+        /// <summary>
+        /// The round's layout call (vote result or vanilla's random pick). Filters it, then decides 2v1: on a map in
+        /// map_two_vs_one an (allowed) HvHvA is played as Sol + Centauri allied vs Aliens. VersusApi.TwoVsOneActive is set
+        /// here, before the original runs (Priority.First: before other mods' prefixes), so spawn code can read it.
+        /// </summary>
         public static void Prefix_SetTeamVersusMode(MP_Strategy __instance, ref GameModeExt.ETeamsVersus __0, bool __1, out bool __state)
         {
             __state = false;
             try
             {
-                if (__0 == GameModeExt.ETeamsVersus.NONE || __1) return;   // Restart's NONE, sandbox/save load (preventSpawning)
+                if (__0 == GameModeExt.ETeamsVersus.NONE) { VersusApi.ClearRound(); return; }   // Restart's NONE
+                if (__1) return;                                                               // sandbox / save load (preventSpawning)
                 if (!InScope(__instance) || !InVotePhase(__instance)) return;
                 __state = true;   // this call picks the round's layout: the postfix records it
 
-                var cfg = VersusVoteMod.Cfg;
                 string map = VersusVoteMod.CurrentMap();
-                var ev = Rules.Evaluate(cfg, map);
-                if (ev.FilterOff)
-                {
-                    if (cfg.Enabled) MelonLogger.Warning("[VERSUS] blocklists exclude every layout on " + map + ": not filtering, " + Modes.Short(__0) + " stands");
-                    return;
-                }
-                if (ev.IsAllowed(__0))
-                {
-                    VersusVoteMod.Debug("layout " + Modes.Short(__0) + " allowed on " + map + (ev.CeilingIgnored ? " (ceiling layer ignored)" : ""));
-                    return;
-                }
+                var ev = Rules.Evaluate(VersusVoteMod.Cfg, map);
+                Filter(__instance, ref __0, map, ev);
 
-                var original = __0;
-                var votes = __instance.TeamsVersusVotes;
-                int originalVotes = Rules.VotesFor(votes, original);
-                var pick = Rules.Retally(ev, votes, out int pickVotes);
-                __0 = pick;
-
-                string why = ev.Reason(original);
-                MelonLogger.Msg("[VERSUS] " + map + ": " + Modes.Short(original) + " (" + originalVotes + " votes, " + why + ") replaced by " + Modes.Short(pick) +
-                                " (" + pickVotes + " votes" + (pickVotes == 0 ? ", random among allowed" : "") + "); " + ev.WindowText());
-                string lead = originalVotes > 0
-                    ? Modes.Display(original) + " was voted but is not counted this round (" + why + ")"
-                    : "The random layout " + Modes.Display(original) + " is not counted this round (" + why + ")";
-                VersusVoteMod.ToAll(lead + " - playing " + Modes.Display(pick) + ".");
+                // ---- 2v1 decision (also when the filter is off: the map list is the switch) ----
+                bool twoVsOne = false;
+                _twoVsOneUnavailable = false;
+                if (__0 == GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS && VersusVoteMod.Cfg.IsTwoVsOneMap(map))
+                {
+                    if (AllianceBridge.CheckNow()) twoVsOne = true;
+                    else
+                    {
+                        _twoVsOneUnavailable = true;
+                        MelonLogger.Warning("[VERSUS] " + map + " is a 2v1 map but Si_Alliance (AllianceApi.ForceAlliance) is not loaded: normal 3-way");
+                    }
+                }
+                VersusApi.Decide(__0, twoVsOne);
+                MelonLogger.Msg("[VERSUS] layout decided on " + map + ": " + (twoVsOne ? "2v1 (HvHvA, Sol + Centauri allied)" : Modes.Short(__0)));
             }
             catch (Exception ex) { MelonLogger.Error("[VERSUS] SetTeamVersusMode prefix: " + ex); }
+        }
+
+        static bool _twoVsOneUnavailable;
+
+        /// <summary>If the layout does not count this round: re-tally the votes over the allowed layouts and replace the argument.</summary>
+        static void Filter(MP_Strategy instance, ref GameModeExt.ETeamsVersus mode, string map, Evaluation ev)
+        {
+            var cfg = VersusVoteMod.Cfg;
+            if (ev.FilterOff)
+            {
+                if (cfg.Enabled) MelonLogger.Warning("[VERSUS] blocklists exclude every layout on " + map + ": not filtering, " + Modes.Short(mode) + " stands");
+                return;
+            }
+            if (ev.IsAllowed(mode))
+            {
+                VersusVoteMod.Debug("layout " + Modes.Short(mode) + " allowed on " + map + (ev.CeilingIgnored ? " (ceiling layer ignored)" : ""));
+                return;
+            }
+
+            var original = mode;
+            var votes = instance.TeamsVersusVotes;
+            int originalVotes = Rules.VotesFor(votes, original);
+            var pick = Rules.Retally(ev, votes, out int pickVotes);
+            mode = pick;
+
+            string why = ev.Reason(original);
+            MelonLogger.Msg("[VERSUS] " + map + ": " + Modes.Short(original) + " (" + originalVotes + " votes, " + why + ") replaced by " + Modes.Short(pick) +
+                            " (" + pickVotes + " votes" + (pickVotes == 0 ? ", random among allowed" : "") + "); " + ev.WindowText());
+            string lead = originalVotes > 0
+                ? ev.Display(original) + " was voted but is not counted this round (" + why + ")"
+                : "The random layout " + ev.Display(original) + " is not counted this round (" + why + ")";
+            VersusVoteMod.ToAll(lead + " - playing " + ev.Display(pick) + ".");
         }
 
         public static void Postfix_SetTeamVersusMode(MP_Strategy __instance, GameModeExt.ETeamsVersus __0, bool __1, bool __state)
@@ -103,11 +139,18 @@ namespace Si_VersusVote
                 if (__0 == GameModeExt.ETeamsVersus.NONE) { _recordedThisRound = false; return; }
                 if (!__state || __1 || _recordedThisRound) return;
                 var applied = __instance.TeamsVersus;
+                VersusApi.Reconcile(applied);
                 if (applied == GameModeExt.ETeamsVersus.NONE) return;
                 _recordedThisRound = true;
                 string map = VersusVoteMod.CurrentMap();
-                History.Add(map, applied);
-                MelonLogger.Msg("[VERSUS] round recorded: " + map + " " + Modes.Short(applied) + " (" + History.Rounds.Count + " in history)");
+                bool two = VersusApi.TwoVsOneActive;
+                History.Add(map, applied, two);
+                MelonLogger.Msg("[VERSUS] round recorded: " + map + " " + Modes.Short(applied) + (two ? " (2v1)" : "") + " (" + History.Rounds.Count + " in history)");
+                if (two) AllianceBridge.Schedule(map);
+                else if (_twoVsOneUnavailable && applied == GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS)
+                    VersusVoteMod.ToAll("2v1 unavailable (Si_Alliance missing) - playing normal 3-way");
+                _twoVsOneUnavailable = false;
+                VersusModUI.MarkDirty();
             }
             catch (Exception ex) { MelonLogger.Error("[VERSUS] SetTeamVersusMode postfix: " + ex); }
         }
@@ -121,11 +164,20 @@ namespace Si_VersusVote
             {
                 if (__0 == null || __1 == GameModeExt.ETeamsVersus.NONE) return;
                 if (!InScope(__instance) || !InVotePhase(__instance)) return;
-                var ev = Rules.Evaluate(VersusVoteMod.Cfg, VersusVoteMod.CurrentMap());
-                if (ev.IsAllowed(__1)) return;
+                string map = VersusVoteMod.CurrentMap();
+                var ev = Rules.Evaluate(VersusVoteMod.Cfg, map);
+                bool threeWay = __1 == GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS;
+                if (ev.IsAllowed(__1))
+                {
+                    // a counted 3-way vote on a 2v1 map: tell the voter what the button means here
+                    if (!threeWay || !ev.TwoVsOne || !VersusVoteMod.MarkWarned(__0, __1)) return;
+                    VersusVoteMod.ToPlayer(__0, "Your 3-way vote counts as 2v1 on " + map + ": Sol and Centauri allied against the Aliens.");
+                    return;
+                }
                 if (!VersusVoteMod.MarkWarned(__0, __1)) return;   // once per player and layout per vote phase
-                VersusVoteMod.ToPlayer(__0, "Your " + Modes.Display(__1) + " vote will not be counted this round (" + ev.Reason(__1) + "). Counted: " +
-                                            Modes.JoinDisplay(ev.AllowedVotable) + ".");
+                string what = threeWay && ev.TwoVsOne ? "3-way (2v1 here)" : Modes.Display(__1);
+                VersusVoteMod.ToPlayer(__0, "Your " + what + " vote will not be counted this round (" + ev.Reason(__1) + "). Counted: " +
+                                            ev.JoinDisplay(ev.AllowedVotable) + ".");
             }
             catch (Exception ex) { MelonLogger.Error("[VERSUS] RPC_VoteTeamVersus prefix: " + ex); }
         }
@@ -137,6 +189,9 @@ namespace Si_VersusVote
             try
             {
                 _recordedThisRound = false;
+                _twoVsOneUnavailable = false;
+                VersusApi.ClearRound();
+                AllianceBridge.Cancel();
                 VersusVoteMod.OnRestart();
             }
             catch (Exception ex) { MelonLogger.Error("[VERSUS] Restart postfix: " + ex); }

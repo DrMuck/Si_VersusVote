@@ -19,6 +19,9 @@ namespace Si_VersusVote
         [JsonProperty("blocked_modes")] public List<string> BlockedModes = new List<string>();
         /// <summary>Per map (mapcycle.txt spelling, case-insensitive): layouts that never count on that map.</summary>
         [JsonProperty("map_blocked_modes")] public Dictionary<string, List<string>> MapBlockedModes = new Dictionary<string, List<string>>();
+        /// <summary>Maps where the 3-way button (HvHvA) is played as 2v1: Sol + Centauri allied (Si_Alliance) vs Aliens.
+        /// HvHvA rules (blocklists, ceiling) still apply to it: blocked HvHvA = no 2v1 either.</summary>
+        [JsonProperty("map_two_vs_one")] public List<string> MapTwoVsOne = new List<string> { "IndustrialQuarter" };
         /// <summary>Max share of the last window_rounds rounds per layout (0 = never, absent = unlimited).</summary>
         [JsonProperty("ceilings")] public Dictionary<string, double> Ceilings = new Dictionary<string, double>
         {
@@ -40,6 +43,10 @@ namespace Si_VersusVote
         [JsonIgnore] public HashSet<GameModeExt.ETeamsVersus> Blocked = new HashSet<GameModeExt.ETeamsVersus>();
         [JsonIgnore] public Dictionary<string, HashSet<GameModeExt.ETeamsVersus>> MapBlocked = new Dictionary<string, HashSet<GameModeExt.ETeamsVersus>>();
         [JsonIgnore] public Dictionary<GameModeExt.ETeamsVersus, double> CeilingOf = new Dictionary<GameModeExt.ETeamsVersus, double>();
+        [JsonIgnore] public HashSet<string> TwoVsOneMaps = new HashSet<string>();
+
+        /// <summary>The map is listed in map_two_vs_one (case/space-insensitive, see Modes.MapKey).</summary>
+        public bool IsTwoVsOneMap(string? map) => !string.IsNullOrEmpty(map) && TwoVsOneMaps.Contains(Modes.MapKey(map));
 
         public static string Dir => System.IO.Path.Combine(MelonEnvironment.UserDataDirectory, "cfg", "VersusVote");
         public static string Path => System.IO.Path.Combine(Dir, "Si_VersusVote_Config.json");
@@ -66,8 +73,14 @@ namespace Si_VersusVote
             {
                 if (File.Exists(Path))
                 {
-                    cfg = JsonConvert.DeserializeObject<VersusConfig>(File.ReadAllText(Path), ReadSettings) ?? new VersusConfig();
+                    string text = File.ReadAllText(Path);
+                    cfg = JsonConvert.DeserializeObject<VersusConfig>(text, ReadSettings) ?? new VersusConfig();
                     MelonLogger.Msg("[VERSUS] Config loaded from " + Path);
+                    if (!text.Contains("\"map_two_vs_one\""))
+                    {
+                        cfg.Save();   // 0.1.0 file: write the new key (default IndustrialQuarter) so it is visible and editable
+                        MelonLogger.Msg("[VERSUS] Config upgraded: map_two_vs_one added (" + string.Join(", ", cfg.MapTwoVsOne ?? new List<string>()) + ")");
+                    }
                 }
                 else
                 {
@@ -99,6 +112,7 @@ namespace Si_VersusVote
             if (BlockedModes == null) BlockedModes = new List<string>();
             if (MapBlockedModes == null) MapBlockedModes = new Dictionary<string, List<string>>();
             if (Ceilings == null) Ceilings = new Dictionary<string, double>();
+            if (MapTwoVsOne == null) MapTwoVsOne = new List<string>();
             if (WindowRounds < 1) WindowRounds = 1;
             if (WindowRounds > 1000) WindowRounds = 1000;
             if (float.IsNaN(AnnounceDelayS) || AnnounceDelayS < 0f) AnnounceDelayS = 0f;
@@ -125,6 +139,10 @@ namespace Si_VersusVote
                     else MelonLogger.Warning("[VERSUS] map_blocked_modes[" + kv.Key + "]: unknown layout '" + s + "' ignored");
                 }
             }
+
+            TwoVsOneMaps = new HashSet<string>();
+            MapTwoVsOne.RemoveAll(string.IsNullOrWhiteSpace);
+            foreach (string m in MapTwoVsOne) TwoVsOneMaps.Add(Modes.MapKey(m));
 
             CeilingOf = new Dictionary<GameModeExt.ETeamsVersus, double>();
             foreach (var kv in Ceilings)
@@ -156,7 +174,7 @@ namespace Si_VersusVote
             var blocked = new List<string>();
             foreach (var m in Blocked) blocked.Add(Modes.Short(m));
             return "enabled " + Enabled + ", announce " + Announce + ", ceilings [" + string.Join(", ", parts) + "], blocked [" + string.Join(", ", blocked) +
-                   "], map rules " + MapBlocked.Count.ToString(CultureInfo.InvariantCulture);
+                   "], map rules " + MapBlocked.Count.ToString(CultureInfo.InvariantCulture) + ", 2v1 maps [" + string.Join(", ", MapTwoVsOne) + "]";
         }
     }
 }

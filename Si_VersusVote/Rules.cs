@@ -22,6 +22,10 @@ namespace Si_VersusVote
         public int Seen;
         public bool CeilingIgnored;   // the ceilings would have left no layout: ceiling layer dropped for this round
         public bool FilterOff;        // the blocklists alone leave no layout (or the mod is disabled): nothing is filtered
+        public bool TwoVsOneMap;      // the map is in map_two_vs_one
+        public bool AllianceMissing;  // ... but Si_Alliance's AllianceApi is not loaded: the 3-way button plays a normal 3-way
+        public bool TwoVsOne => TwoVsOneMap && !AllianceMissing;   // the 3-way button means 2v1 this round
+        public int TwoVsOneInWindow;  // 2v1 rounds in the window (also counted as HvHvA)
         public readonly Dictionary<GameModeExt.ETeamsVersus, ModeStatus> Status = new Dictionary<GameModeExt.ETeamsVersus, ModeStatus>();
 
         public bool IsAllowed(GameModeExt.ETeamsVersus m)
@@ -30,6 +34,16 @@ namespace Si_VersusVote
         /// <summary>Allowed votable layouts (HvH, HvA, HvHvA), in enum order.</summary>
         public List<GameModeExt.ETeamsVersus> AllowedVotable => Modes.Votable.Where(IsAllowed).ToList();
         public List<GameModeExt.ETeamsVersus> BlockedVotable => Modes.Votable.Where(m => !IsAllowed(m)).ToList();
+
+        /// <summary>Modes.Display, except the 3-way button on a 2v1 map is "2v1".</summary>
+        public string Display(GameModeExt.ETeamsVersus m)
+            => m == GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS && TwoVsOne ? "2v1" : Modes.Display(m);
+
+        public string JoinDisplay(IEnumerable<GameModeExt.ETeamsVersus> modes)
+        {
+            var parts = modes.Select(Display).ToList();
+            return parts.Count == 0 ? "none" : string.Join(", ", parts);
+        }
 
         public string Reason(GameModeExt.ETeamsVersus m)
         {
@@ -52,7 +66,9 @@ namespace Si_VersusVote
             {
                 var s = Status[m];
                 if (m == GameModeExt.ETeamsVersus.HUMANS2_VS_ALIENS && s.Count == 0 && s.Max < 0) continue;
-                parts.Add(Modes.Short(m) + " " + s.Count + "/" + (s.Max < 0 ? "-" : s.Max.ToString()));
+                string part = Modes.Short(m) + " " + s.Count + "/" + (s.Max < 0 ? "-" : s.Max.ToString());
+                if (m == GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS && TwoVsOneInWindow > 0) part += " (2v1 " + TwoVsOneInWindow + ")";
+                parts.Add(part);
             }
             string head = Seen >= Window ? "last " + Window : "last " + Seen + " (window " + Window + ")";
             return head + ": " + string.Join(", ", parts);
@@ -64,7 +80,9 @@ namespace Si_VersusVote
         public static Evaluation Evaluate(VersusConfig cfg, string map)
         {
             var ev = new Evaluation { Map = map ?? "", Window = cfg.WindowRounds };
-            var counts = History.WindowCounts(cfg.WindowRounds, out ev.Seen);
+            var counts = History.WindowCounts(cfg.WindowRounds, out ev.Seen, out ev.TwoVsOneInWindow);
+            ev.TwoVsOneMap = cfg.IsTwoVsOneMap(map);
+            if (ev.TwoVsOneMap) ev.AllianceMissing = !AllianceBridge.Available;
             cfg.MapBlocked.TryGetValue(Modes.MapKey(map), out var mapSet);
 
             var ceilingHit = new HashSet<GameModeExt.ETeamsVersus>();
