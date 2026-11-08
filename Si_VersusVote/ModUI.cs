@@ -139,6 +139,12 @@ namespace Si_VersusVote
             if (twoRemove.Length > 0)
                 x.Picker("/versus 2v1 remove", "Remove a 2v1 map", "That map plays a normal 3-way again.", true, "choice", twoRemove);
 
+            x.Value("/versus set lone_money", "2v1 lone team start money, x [1..10]",
+                    "The lone team's (Aliens') starting resources are multiplied by this in a 2v1 round, granted once the alliance is confirmed. 1 = off.", true,
+                    c.TwoVsOne.LoneStartMoneyMult.ToString("0.##", Inv));
+            x.Value("/versus set lone_units", "2v1 lone team starter units, x [1..10]",
+                    "Si_StarterUnits multiplies every starter unit count of the lone team by this integer in a 2v1 round (extra units only up to the unit cap). 1 = off.", true,
+                    c.TwoVsOne.LoneStarterUnitsMult.ToString(Inv));
             x.Value("/versus set announce_delay_s", "Vote line delay, s [0..60]", "Delay of the vote-open line after the vote starts.", true, c.AnnounceDelayS.ToString("0.##", Inv));
             x.Value("/versus set announce_repeat_s", "Vote line repeat, s [0..120]", "Repeat the line this much later if nobody voted (0 = off).", true, c.AnnounceRepeatS.ToString("0.##", Inv));
             x.OnOff("/versus set debug", "Debug logging", "Extra console logging.", true, c.Debug);

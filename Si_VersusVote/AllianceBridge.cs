@@ -14,6 +14,8 @@ namespace Si_VersusVote
     internal static class AllianceBridge
     {
         const string TypeName = "Si_Alliance.AllianceApi";
+        /// <summary>The two allied teams of a 2v1 round (names as passed to ForceAlliance); the lone team is the other one.</summary>
+        internal const string TeamA = "Sol", TeamB = "Centauri";
         const float RetryEvery = 0.5f, GiveUpAfter = 5f;
 
         static MethodInfo? _force;
@@ -117,7 +119,7 @@ namespace Si_VersusVote
             _tries++;
             bool ok = false;
             string err = "";
-            try { ok = (bool)m.Invoke(null, new object[] { "Sol", "Centauri", true, "2v1 " + _map }); }
+            try { ok = (bool)m.Invoke(null, new object[] { TeamA, TeamB, true, "2v1 " + _map }); }
             catch (Exception ex) { err = ex.GetBaseException().Message; }
 
             if (ok)

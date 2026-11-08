@@ -13,6 +13,8 @@ namespace Si_VersusVote
     ///                   (prefix with Priority.First: VersusApi.TwoVsOneActive is set before other mods' prefixes read it)
     ///   prefix          protected void MP_Strategy.RPC_VoteTeamVersus(Player, GameModeExt.ETeamsVersus)
     ///   postfix         public override void MP_Strategy.Restart()
+    ///   postfix         protected virtual void MP_Strategy.SpawnStructuresAndStartingResources()  (Priority.Last: after
+    ///                   Si_Resources' / Si_RTS_AI's postfixes that overwrite Team.StartingResources) - 2v1 lone-team money
     /// </summary>
     internal static class Patches
     {
@@ -27,9 +29,11 @@ namespace Si_VersusVote
                   nameof(Prefix_RPC_VoteTeamVersus), null, "MP_Strategy.RPC_VoteTeamVersus(Player, ETeamsVersus)");
             Patch(harmony, AccessTools.DeclaredMethod(typeof(MP_Strategy), "Restart", Type.EmptyTypes),
                   null, nameof(Postfix_Restart), "MP_Strategy.Restart()");
+            Patch(harmony, AccessTools.DeclaredMethod(typeof(MP_Strategy), "SpawnStructuresAndStartingResources", Type.EmptyTypes),
+                  null, nameof(Postfix_SpawnStructuresAndStartingResources), "MP_Strategy.SpawnStructuresAndStartingResources()", -1, Priority.Last);
         }
 
-        static void Patch(HarmonyLib.Harmony harmony, MethodInfo? target, string? prefix, string? postfix, string label, int prefixPriority = -1)
+        static void Patch(HarmonyLib.Harmony harmony, MethodInfo? target, string? prefix, string? postfix, string label, int prefixPriority = -1, int postfixPriority = -1)
         {
             if (target == null) { MelonLogger.Error("[VERSUS] " + label + " not found: that part of Si_VersusVote is inactive"); return; }
             try
@@ -40,9 +44,13 @@ namespace Si_VersusVote
                     pre = new HarmonyMethod(typeof(Patches), prefix);
                     if (prefixPriority >= 0) pre.priority = prefixPriority;
                 }
-                harmony.Patch(target,
-                    prefix: pre,
-                    postfix: postfix != null ? new HarmonyMethod(typeof(Patches), postfix) : null);
+                HarmonyMethod? post = null;
+                if (postfix != null)
+                {
+                    post = new HarmonyMethod(typeof(Patches), postfix);
+                    if (postfixPriority >= 0) post.priority = postfixPriority;
+                }
+                harmony.Patch(target, prefix: pre, postfix: post);
                 VersusVoteMod.Debug("patched " + label);
             }
             catch (Exception ex) { MelonLogger.Error("[VERSUS] patching " + label + " failed: " + ex.Message); }
@@ -94,13 +102,73 @@ namespace Si_VersusVote
                         MelonLogger.Warning("[VERSUS] " + map + " is a 2v1 map but Si_Alliance (AllianceApi.ForceAlliance) is not loaded: normal 3-way");
                     }
                 }
-                VersusApi.Decide(__0, twoVsOne);
-                MelonLogger.Msg("[VERSUS] layout decided on " + map + ": " + (twoVsOne ? "2v1 (HvHvA, Sol + Centauri allied)" : Modes.Short(__0)));
+                Team? lone = twoVsOne ? FindLoneTeam(__instance, __0) : null;
+                VersusApi.Decide(__0, twoVsOne, lone);
+                MelonLogger.Msg("[VERSUS] layout decided on " + map + ": " + (twoVsOne ? "2v1 (HvHvA, Sol + Centauri allied" +
+                                (lone != null ? ", lone team " + VersusApi.LoneTeam + ": " + VersusVoteMod.Cfg.TwoVsOne.Summary() : ", lone team unknown: no compensation") + ")"
+                                : Modes.Short(__0)));
             }
             catch (Exception ex) { MelonLogger.Error("[VERSUS] SetTeamVersusMode prefix: " + ex); }
         }
 
         static bool _twoVsOneUnavailable;
+
+        /// <summary>
+        /// The lone team of a 2v1: among the TeamSetups present in <paramref name="layout"/> (Enabled, ForTeamVersusModes
+        /// contains it, Team set, not IsSpecial), the one that is not one of the allied pair (AllianceBridge.TeamA / TeamB,
+        /// matched by TeamShortName / TeamName, case-insensitive, prefix like Si_Alliance's lookup). Read from the setups
+        /// because GetTeamSetupActive needs TeamsVersus, which the original has not set yet. Null (warning) unless exactly
+        /// one team is left.
+        /// </summary>
+        internal static Team? FindLoneTeam(MP_Strategy mode, GameModeExt.ETeamsVersus layout)
+        {
+            var left = new List<Team>();
+            try
+            {
+                if (mode.TeamSetups != null)
+                    foreach (var ts in mode.TeamSetups)
+                    {
+                        if (ts == null || !ts.Enabled || ts.Team == null || ts.ForTeamVersusModes == null || !ts.ForTeamVersusModes.Contains(layout)) continue;
+                        var t = ts.Team;
+                        bool special = false; try { special = t.IsSpecial; } catch { }
+                        if (special || IsAllyName(t, AllianceBridge.TeamA) || IsAllyName(t, AllianceBridge.TeamB) || left.Contains(t)) continue;
+                        left.Add(t);
+                    }
+            }
+            catch (Exception ex) { MelonLogger.Warning("[VERSUS] lone team lookup failed: " + ex.GetBaseException().Message); }
+            if (left.Count == 1) return left[0];
+            var names = new List<string>();
+            foreach (var t in left) { try { names.Add(t.TeamShortName); } catch { names.Add("?"); } }
+            MelonLogger.Warning("[VERSUS] 2v1: expected exactly one team outside " + AllianceBridge.TeamA + " + " + AllianceBridge.TeamB + " in HvHvA, found " + left.Count +
+                                " [" + string.Join(", ", names) + "]: no lone-team compensation this round");
+            return null;
+        }
+
+        static bool IsAllyName(Team t, string ally)
+        {
+            string a = ally.ToLowerInvariant(), sn = "", ln = "";
+            try { sn = (t.TeamShortName ?? "").ToLowerInvariant(); } catch { }
+            try { ln = (t.TeamName ?? "").ToLowerInvariant(); } catch { }
+            return (sn.Length > 0 && sn.StartsWith(a)) || (ln.Length > 0 && ln.StartsWith(a));
+        }
+
+        // ------------------------------------------------------------------ SpawnStructuresAndStartingResources
+
+        /// <summary>
+        /// Vanilla has just set every active team's Team.StartingResources (MP_Strategy.cs:2750; runs once per round, on
+        /// the first team join after SetTeamVersusMode queued it). Priority.Last, so the amount read here is the one other
+        /// mods' postfixes (Si_Resources, Si_RTS_AI's guard) wrote. LoneBonus grants (mult - 1) x that amount once the
+        /// alliance is confirmed.
+        /// </summary>
+        public static void Postfix_SpawnStructuresAndStartingResources(MP_Strategy __instance)
+        {
+            try
+            {
+                if (!InScope(__instance) || __instance.TeamsVersus == GameModeExt.ETeamsVersus.NONE) return;
+                LoneBonus.OnStartingResourcesSet();
+            }
+            catch (Exception ex) { MelonLogger.Error("[VERSUS] SpawnStructuresAndStartingResources postfix: " + ex); }
+        }
 
         /// <summary>If the layout does not count this round: re-tally the votes over the allowed layouts and replace the argument.</summary>
         static void Filter(MP_Strategy instance, ref GameModeExt.ETeamsVersus mode, string map, Evaluation ev)

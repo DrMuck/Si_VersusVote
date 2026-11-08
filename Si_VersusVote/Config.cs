@@ -22,6 +22,8 @@ namespace Si_VersusVote
         /// <summary>Maps where the 3-way button (HvHvA) is played as 2v1: Sol + Centauri allied (Si_Alliance) vs Aliens.
         /// HvHvA rules (blocklists, ceiling) still apply to it: blocked HvHvA = no 2v1 either.</summary>
         [JsonProperty("map_two_vs_one")] public List<string> MapTwoVsOne = new List<string> { "IndustrialQuarter" };
+        /// <summary>2v1 compensation for the lone team (the team outside the Sol + Centauri alliance, the Aliens).</summary>
+        [JsonProperty("two_vs_one")] public TwoVsOneConfig TwoVsOne = new TwoVsOneConfig();
         /// <summary>Max share of the last window_rounds rounds per layout (0 = never, absent = unlimited).</summary>
         [JsonProperty("ceilings")] public Dictionary<string, double> Ceilings = new Dictionary<string, double>
         {
@@ -76,10 +78,16 @@ namespace Si_VersusVote
                     string text = File.ReadAllText(Path);
                     cfg = JsonConvert.DeserializeObject<VersusConfig>(text, ReadSettings) ?? new VersusConfig();
                     MelonLogger.Msg("[VERSUS] Config loaded from " + Path);
-                    if (!text.Contains("\"map_two_vs_one\""))
+                    var added = new List<string>();
+                    if (!text.Contains("\"map_two_vs_one\"")) added.Add("map_two_vs_one (" + string.Join(", ", cfg.MapTwoVsOne ?? new List<string>()) + ")");
+                    if (!text.Contains("\"two_vs_one\"")) added.Add("two_vs_one (lone_start_money_mult, lone_starter_units_mult)");
+                    if (!text.Contains("\"lone_start_money_mult\"") && text.Contains("\"two_vs_one\"")) added.Add("two_vs_one.lone_start_money_mult");
+                    if (!text.Contains("\"lone_starter_units_mult\"") && text.Contains("\"two_vs_one\"")) added.Add("two_vs_one.lone_starter_units_mult");
+                    if (added.Count > 0)
                     {
-                        cfg.Save();   // 0.1.0 file: write the new key (default IndustrialQuarter) so it is visible and editable
-                        MelonLogger.Msg("[VERSUS] Config upgraded: map_two_vs_one added (" + string.Join(", ", cfg.MapTwoVsOne ?? new List<string>()) + ")");
+                        if (cfg.TwoVsOne == null) cfg.TwoVsOne = new TwoVsOneConfig();
+                        cfg.Save();   // older file: write the new keys (defaults) so they are visible and editable
+                        MelonLogger.Msg("[VERSUS] Config upgraded: added " + string.Join(", ", added));
                     }
                 }
                 else
@@ -113,6 +121,8 @@ namespace Si_VersusVote
             if (MapBlockedModes == null) MapBlockedModes = new Dictionary<string, List<string>>();
             if (Ceilings == null) Ceilings = new Dictionary<string, double>();
             if (MapTwoVsOne == null) MapTwoVsOne = new List<string>();
+            if (TwoVsOne == null) TwoVsOne = new TwoVsOneConfig();
+            TwoVsOne.Sanitize();
             if (WindowRounds < 1) WindowRounds = 1;
             if (WindowRounds > 1000) WindowRounds = 1000;
             if (float.IsNaN(AnnounceDelayS) || AnnounceDelayS < 0f) AnnounceDelayS = 0f;
@@ -174,7 +184,33 @@ namespace Si_VersusVote
             var blocked = new List<string>();
             foreach (var m in Blocked) blocked.Add(Modes.Short(m));
             return "enabled " + Enabled + ", announce " + Announce + ", ceilings [" + string.Join(", ", parts) + "], blocked [" + string.Join(", ", blocked) +
-                   "], map rules " + MapBlocked.Count.ToString(CultureInfo.InvariantCulture) + ", 2v1 maps [" + string.Join(", ", MapTwoVsOne) + "]";
+                   "], map rules " + MapBlocked.Count.ToString(CultureInfo.InvariantCulture) + ", 2v1 maps [" + string.Join(", ", MapTwoVsOne) + "], 2v1 lone team: " +
+                   TwoVsOne.Summary();
         }
+    }
+
+    /// <summary>"two_vs_one" section: what the lone team of a 2v1 round (the Aliens) gets on top of vanilla.</summary>
+    public class TwoVsOneConfig
+    {
+        public const float MaxMoneyMult = 10f;
+        public const int MaxUnitsMult = 10;
+
+        /// <summary>The lone team's starting resources are multiplied by this once per round (1.0 = off, 1.0..10).</summary>
+        [JsonProperty("lone_start_money_mult")] public float LoneStartMoneyMult = 2f;
+        /// <summary>Si_StarterUnits multiplies every starter unit count of the lone team by this integer (1 = off, 1..10).</summary>
+        [JsonProperty("lone_starter_units_mult")] public int LoneStarterUnitsMult = 2;
+
+        public void Sanitize()
+        {
+            if (float.IsNaN(LoneStartMoneyMult) || float.IsInfinity(LoneStartMoneyMult) || LoneStartMoneyMult < 1f) LoneStartMoneyMult = 1f;
+            if (LoneStartMoneyMult > MaxMoneyMult) LoneStartMoneyMult = MaxMoneyMult;
+            LoneStartMoneyMult = (float)Math.Round(LoneStartMoneyMult, 2);
+            if (LoneStarterUnitsMult < 1) LoneStarterUnitsMult = 1;
+            if (LoneStarterUnitsMult > MaxUnitsMult) LoneStarterUnitsMult = MaxUnitsMult;
+        }
+
+        public static string Mult(float m) => "x" + m.ToString("0.##", CultureInfo.InvariantCulture);
+
+        public string Summary() => "start money " + Mult(LoneStartMoneyMult) + ", starter units x" + LoneStarterUnitsMult.ToString(CultureInfo.InvariantCulture);
     }
 }

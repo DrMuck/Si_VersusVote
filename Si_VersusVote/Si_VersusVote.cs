@@ -10,6 +10,10 @@
  Aliens: the vanilla HvHvA layout is applied and Si_Alliance (AllianceApi.ForceAlliance, by reflection) locks the two
  human teams together for the round. Other mods read VersusApi.TwoVsOneActive (VersusApi.cs).
 
+ Lone-team compensation (0.3.0, config section two_vs_one): the lone team's starting resources x lone_start_money_mult
+ (LoneBonus.cs, after the vanilla grant in MP_Strategy.SpawnStructuresAndStartingResources, only once the alliance is
+ confirmed), and VersusApi v2 (LoneTeam, LoneStarterUnitsMult, IsLoneTeam) for Si_StarterUnits.
+
    !layout | !versus            status: counted / not counted this round, counts in the window, 2v1 state
    !versus stats                shares from the whole history (all maps + per map, 2v1 separately)
    !versus set | block | mapblock | 2v1 | save | reload | reset    admin (Power.Generic), see Commands.cs / Edit.cs
@@ -31,7 +35,7 @@ namespace Si_VersusVote
 {
     public class VersusVoteMod : MelonMod
     {
-        public const string Version = "0.2.0";
+        public const string Version = "0.3.0";
         internal const string Tag = "<color=#7FD4FF>[LAYOUT]</color> ";
         internal static VersusConfig Cfg = new VersusConfig();
 
@@ -177,6 +181,8 @@ namespace Si_VersusVote
             if (ev.CeilingIgnored) w += " (ceilings ignored this round: they would leave no layout)";
             lines.Add(w);
             lines.Add(TwoVsOneStatus(ev));
+            string comp = CompensationStatus(ev);
+            if (comp.Length > 0) lines.Add(comp);
             return lines;
         }
 
@@ -196,11 +202,30 @@ namespace Si_VersusVote
             return "2v1 map: " + TwoVsOneHint + (ev.IsAllowed(GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS) ? "" : " - but 3-way/2v1 is not counted this round (" + ev.Reason(GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS) + ")");
         }
 
+        /// <summary>
+        /// "2v1 lone team Alien: start money x2, starter units x2" while 2v1 is active (plus the grant once done);
+        /// "2v1 lone team compensation: ..." on a 2v1 map before the layout is decided; "" elsewhere.
+        /// </summary>
+        internal static string CompensationStatus(Evaluation ev)
+        {
+            var t = Cfg.TwoVsOne;
+            if (VersusApi.TwoVsOneActive)
+            {
+                string lone = VersusApi.LoneTeam;
+                if (lone.Length == 0) return "2v1 lone team unknown (no single team outside Sol + Centauri): no compensation this round";
+                string grant = LoneBonus.StatusText();
+                return "2v1 lone team " + lone + ": " + t.Summary() + (grant.Length > 0 ? " (" + grant + ")" : "");
+            }
+            if (ev.TwoVsOneMap) return "2v1 lone team compensation: " + t.Summary();
+            return "";
+        }
+
         // ------------------------------------------------------------------ 2v1 outcome (AllianceBridge)
 
         internal static void TwoVsOneApplied(string map)
         {
             ToAll("3-way on " + map + " is played as 2v1: Sol and Centauri are allied against the Aliens.");
+            LoneBonus.OnAllianceOk();
             VersusModUI.MarkDirty();
         }
 

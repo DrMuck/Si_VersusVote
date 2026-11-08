@@ -21,6 +21,7 @@ namespace Si_VersusVote
         internal sealed class Key
         {
             public string Name = "", Label = "", Desc = "";
+            public string[] Aliases = new string[0];
             public bool IsBool, IsInt;
             public double Min, Max;
             public Func<VersusConfig, double> Get = _ => 0;
@@ -39,6 +40,12 @@ namespace Si_VersusVote
                       Get = c => c.AnnounceDelayS, Set = (c, v) => c.AnnounceDelayS = (float)v },
             new Key { Name = "announce_repeat_s", Label = "Vote line repeat (s)", Desc = "Repeat the line this much later if nobody voted (0 = off).", Min = 0, Max = 120,
                       Get = c => c.AnnounceRepeatS, Set = (c, v) => c.AnnounceRepeatS = (float)v },
+            new Key { Name = "lone_money", Aliases = new[] { "lone_start_money_mult", "lone_start_money" }, Label = "2v1 lone team start money (x)",
+                      Desc = "The lone team's (Aliens') starting resources are multiplied by this in a 2v1 round (1 = off). Applies from the next grant.", Min = 1, Max = TwoVsOneConfig.MaxMoneyMult,
+                      Get = c => c.TwoVsOne.LoneStartMoneyMult, Set = (c, v) => c.TwoVsOne.LoneStartMoneyMult = (float)v },
+            new Key { Name = "lone_units", Aliases = new[] { "lone_starter_units_mult", "lone_starter_units" }, Label = "2v1 lone team starter units (x)",
+                      Desc = "Si_StarterUnits multiplies every starter unit count of the lone team by this integer in a 2v1 round (1 = off).", IsInt = true, Min = 1, Max = TwoVsOneConfig.MaxUnitsMult,
+                      Get = c => c.TwoVsOne.LoneStarterUnitsMult, Set = (c, v) => c.TwoVsOne.LoneStarterUnitsMult = (int)v },
             new Key { Name = "debug", Label = "Debug logging", Desc = "Extra console logging.", IsBool = true,
                       Get = c => c.Debug ? 1 : 0, Set = (c, v) => c.Debug = v != 0 },
         };
@@ -91,7 +98,8 @@ namespace Si_VersusVote
                 outp.Add(SetCeiling(who, modeText, rest.Length > 0 ? rest[0] : ""));
                 return outp;
             }
-            var key = Keys.FirstOrDefault(k => string.Equals(k.Name, keyName, StringComparison.OrdinalIgnoreCase));
+            var key = Keys.FirstOrDefault(k => string.Equals(k.Name, keyName, StringComparison.OrdinalIgnoreCase) ||
+                                               k.Aliases.Any(a => string.Equals(a, keyName, StringComparison.OrdinalIgnoreCase)));
             if (key == null) { outp.Add("Unknown key '" + keyName + "'. !versus set lists the keys."); return outp; }
             if (args.Length < 2) { outp.Add(key.Name + " = " + Show(key, c) + " (" + Range(key) + "). !versus set " + key.Name + " <value>"); return outp; }
 
@@ -104,7 +112,7 @@ namespace Si_VersusVote
             }
             else
             {
-                string num = raw.TrimEnd('s', 'S');
+                string num = raw.TrimEnd('s', 'S').TrimStart('x', 'X');
                 bool relative = num.StartsWith("+") || num.StartsWith("-");
                 if (!double.TryParse(num, NumberStyles.Float, Inv, out double parsed) || double.IsNaN(parsed) || double.IsInfinity(parsed))
                 {

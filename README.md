@@ -14,8 +14,15 @@ Since 0.2.0:
   against the Aliens, through Si_Alliance. Other mods can read the state through `VersusApi` (see below).
 - **Si_ModUI page**: status for everyone, live settings for admins. Every setting is also a chat command.
 
+Since 0.3.0:
+
+- **2v1 lone-team compensation** (config section `two_vs_one`): the lone team (Aliens) gets its starting resources
+  x `lone_start_money_mult` (default 2.0), and Si_StarterUnits 1.2.0 multiplies its starter unit counts by
+  `lone_starter_units_mult` (default 2). `VersusApi` v2 exposes the lone team and both multipliers.
+
 Optional companions: **Admin Mod** (chat commands, private voter notes; the filter works without it), **Si_Alliance**
-with `AllianceApi` (needed for 2v1), **Si_ModUI_Server** 1.6.x (the page).
+with `AllianceApi` (needed for 2v1), **Si_ModUI_Server** 1.6.x (the page), **Si_StarterUnits** 1.2.0 (lone-team starter
+unit multiplier).
 
 ## How the vote works in vanilla
 
@@ -41,7 +48,8 @@ Decompile of SilicaCore 1.0.15 (`MP_Strategy.cs`, `GameModeExt.cs`):
 | `MP_Strategy.SetTeamVersusMode(ETeamsVersus, bool preventSpawning = false)` | prefix, `Priority.First` | if the layout does not count: re-tally, replace the argument, announce; then decide 2v1 and set `VersusApi.TwoVsOneActive` |
 | same | postfix | record the applied layout in the history (once per round), schedule the 2v1 alliance |
 | `MP_Strategy.RPC_VoteTeamVersus(Player, ETeamsVersus)` (protected) | prefix | private note to a player whose vote will not count, or whose 3-way vote counts as 2v1 (vote untouched) |
-| `MP_Strategy.Restart()` | postfix | new round: reset the per-round flags, `TwoVsOneActive = false` |
+| `MP_Strategy.Restart()` | postfix | new round: reset the per-round flags, `TwoVsOneActive = false`, lone team cleared |
+| `MP_Strategy.SpawnStructuresAndStartingResources()` (protected virtual) | postfix, `Priority.Last` | 2v1: lone team's starting money x `lone_start_money_mult` (see "Lone-team compensation") |
 | `OnUpdate` | - | 2v1 alliance request (from the frame after the postfix, retried up to 5 s); "counted this round" line ~3 s after the vote opens, repeated ~10 s later if nobody voted (0.5 s poll) |
 
 The filter only acts on the plain `MP_Strategy` mode on the server, outside the campaign, and only on the call that picks
@@ -95,17 +103,52 @@ On a map listed in `map_two_vs_one` (default `["IndustrialQuarter"]`, matched li
   `2v1 unavailable (Si_Alliance refused the alliance) - playing normal 3-way`.
 - Ending the alliance at round end is Si_Alliance's job (its per-round reset).
 
+### Lone-team compensation (0.3.0)
+
+The lone team is the team of the round that is not in the alliance. It is derived in the SetTeamVersusMode prefix,
+together with `TwoVsOneActive`: among `MP_Strategy.TeamSetups` present in HvHvA (`Enabled`, `ForTeamVersusModes`
+contains HUMANS_VS_HUMANS_VS_ALIENS, `Team` set, not `IsSpecial`), the one whose TeamShortName / TeamName does not
+start with "Sol" or "Centauri" (the names passed to ForceAlliance). On the vanilla scenes that is `Alien`. If not
+exactly one team is left, a warning is logged and the round has no compensation (2v1 itself still applies).
+(`GetTeamSetupActive` cannot be used there: it needs `TeamsVersus`, which the original has not set yet.)
+
+**Starting money** (`lone_start_money_mult`, float 1..10, default 2.0, 1 = off). Vanilla 1.0.15 sets each team's
+starting money at exactly one place per round: `MP_Strategy.SpawnStructuresAndStartingResources()` (MP_Strategy.cs
+2734-2755, the assignment `teamSetup.Team.StartingResources = Max(Ceil(teamSetup.StartingResources * MultStartingRes *
+scale), first deposit cost)` at line 2750). `SetTeamVersusMode` only queues it (`QueueCoopSpawnBaseStructures`); it
+runs on the first player team change after the layout vote (MP_Strategy.cs 1954-1957), together with the HQ / Nest
+spawn. Si_Resources (the build deployed for 1.0.x) and Si_RTS_AI's StartingResourcesGuard overwrite `Team.StartingResources` in their own
+postfixes on the same method, so this mod's postfix runs with `Priority.Last` and reads the final amount `S`. It then
+adds `ceil(S * (mult - 1))` to `Team.StartingResources` of the lone team, once per round, **when both** have happened
+(either order): the money was set, and Si_Alliance confirmed the alliance (AllianceBridge success). In a normal round
+the alliance is confirmed ~0.2 s after the vote and the bases spawn when the first player picks a team, so the bonus
+is granted in the postfix. If the alliance is refused, 2v1 is withdrawn before anything was granted (no bonus); should
+2v1 ever be withdrawn after a grant, what is left of the bonus is taken back. Log:
+`[VERSUS] 2v1: Alien starting resources 9000 -> 18000 (x2)`. Si_MapBalance does not touch starting money.
+
+**Starter units** (`lone_starter_units_mult`, integer 1..10, default 2, 1 = off). Applied by Si_StarterUnits 1.2.0
+(reads `VersusApi.IsLoneTeam` / `LoneStarterUnitsMult` when it spawns, round start + 5 s); this mod only stores the
+value. Si_StarterUnits keys on `TwoVsOneActive` + `LoneTeam` from the prefix, not on the alliance confirmation.
+
+Both values are read live: an edit applies to whatever is granted after it. Si_Alliance's own `lone_income_mult`
+(harvest income bonus) is independent of these.
+
 ### API for other mods (`VersusApi.cs`)
 
 ```csharp
 namespace Si_VersusVote {
   public static class VersusApi {
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;              // 2 since 0.3.0; every v1 member unchanged
     public static bool TwoVsOneActive { get; }   // see below
     public static string CurrentMap { get; }     // NetworkGameServer.GetServerMap(), fallback last loaded scene
     public static string LayoutShort { get; }    // "HvH", "HvA", "HvHvA", "2v1", "" (NONE)
     public static bool IsTwoVsOneMap(string map);// listed in map_two_vs_one (case/space-insensitive)
     public static event Action<bool> LayoutDecided; // fired right after the flag is set; argument = twoVsOne
+    // v2 (0.3.0)
+    public static string LoneTeam { get; }            // TeamShortName of the lone team ("Alien"); "" when not 2v1
+    public static float LoneStartMoneyMult { get; }   // two_vs_one.lone_start_money_mult while 2v1 (with a lone team), else 1
+    public static int LoneStarterUnitsMult { get; }   // two_vs_one.lone_starter_units_mult while 2v1 (with a lone team), else 1
+    public static bool IsLoneTeam(Team team);         // same Team object, or TeamShortName / TeamName equal (case-insensitive)
   }
 }
 ```
@@ -118,6 +161,8 @@ namespace Si_VersusVote {
 - It goes back to false mid-round only when 2v1 is withdrawn: Si_Alliance refused the alliance, or another mod's
   prefix changed the layout away from HvHvA (detected in the postfix). `LayoutDecided` then fires a second time with
   `false`. Handlers run inside the Harmony prefix (or OnUpdate for the withdrawal); exceptions are caught and logged.
+- The v2 members are set in the same prefix, before `LayoutDecided` fires, and cleared with `TwoVsOneActive`
+  (Restart, withdrawal). The multipliers read the live config.
 - `LayoutShort` is `"2v1"` while `TwoVsOneActive`, else the layout this mod decided / saw applied, else the live
   `TeamsVersus` of the current game mode.
 
@@ -138,7 +183,7 @@ that registered `/versus`). The document is cached and rebuilt after a change or
 | Who | Shows / does |
 |---|---|
 | everyone | map, counted / not counted this round with reasons, window counts (`last 20: HvHvA 4/4 (2v1 1), HvA 7/10, HvH 5/6`), 2v1 state; table "This round" (layout, counted, reason, count/max), table "All N rounds" (shares, 2v1 row), table "Per-map exclusions", server-wide disabled list + 2v1 maps; buttons Status, Statistics, Help |
-| admins | switches filter / announce / debug; value rows window_rounds, ceiling HvHvA (= 2v1), HvA, HvH, vote line delay / repeat; multi-select "Disabled on this server" (HvH / HvA / HvHvA, click toggles); pickers "Exclude a layout on a map" (map:mode), "Remove a map exclusion", "Add a 2v1 map", "Remove a 2v1 map"; buttons All settings, Save config, Reload config, Reset history |
+| admins | switches filter / announce / debug; value rows 2v1 lone team start money (x) and starter units (x), window_rounds, ceiling HvHvA (= 2v1), HvA, HvH, vote line delay / repeat; multi-select "Disabled on this server" (HvH / HvA / HvHvA, click toggles); pickers "Exclude a layout on a map" (map:mode), "Remove a map exclusion", "Add a 2v1 map", "Remove a 2v1 map"; buttons All settings, Save config, Reload config, Reset history |
 
 **Admin gating** (same as Si_WaspHarvest): rows exported with `admin: true` (`"a": true`) are merged by the ModUI server
 only into frames of players for whom `Player.IsAdmin()` is true; other players never receive them. That is display only.
@@ -149,8 +194,9 @@ only into frames of players for whom `Player.IsAdmin()` is true; other players n
 
 ## Config
 
-`UserData/cfg/VersusVote/Si_VersusVote_Config.json`, written with defaults on first start; a 0.1.0 file gets
-`map_two_vs_one` added on first load. Mode names: `HvH`, `HvA`, `HvHvA` (also `3way`, `3-way`), `H2vA`, or the enum
+`UserData/cfg/VersusVote/Si_VersusVote_Config.json`, written with defaults on first start; an older file gets the
+missing keys (`map_two_vs_one` from 0.2.0, the `two_vs_one` section from 0.3.0) added on first load. `map_two_vs_one`
+stays a top-level key (unchanged). Mode names: `HvH`, `HvA`, `HvHvA` (also `3way`, `3-way`), `H2vA`, or the enum
 names (`HUMANS_VS_ALIENS` ...). Unknown names are logged and ignored. Live edits (chat or page) rewrite the file.
 
 Default:
@@ -162,6 +208,10 @@ Default:
   "blocked_modes": [],
   "map_blocked_modes": {},
   "map_two_vs_one": [ "IndustrialQuarter" ],
+  "two_vs_one": {
+    "lone_start_money_mult": 2.0,
+    "lone_starter_units_mult": 2
+  },
   "ceilings": {
     "HvHvA": 0.2,
     "HvA": 0.5,
@@ -198,6 +248,8 @@ Example with per-map exclusions (no 3-way on the two small maps, HvH never on Ba
 | `blocked_modes` | layouts that never count on this server |
 | `map_blocked_modes` | map -> layouts that never count there |
 | `map_two_vs_one` | maps where the 3-way button plays 2v1 (Sol + Centauri allied vs Aliens); empty = no 2v1 |
+| `two_vs_one.lone_start_money_mult` | 2v1: lone team's starting resources x this (1..10, 1 = off), granted once the alliance is confirmed |
+| `two_vs_one.lone_starter_units_mult` | 2v1: Si_StarterUnits multiplies the lone team's starter unit counts by this integer (1..10, 1 = off) |
 | `ceilings` | layout -> max share of the window (0 = never, absent = unlimited); 2v1 rounds count as HvHvA |
 | `window_rounds` | rounds the ceilings look back over (1..1000) |
 | `history_file` | history path, relative to the config folder unless absolute |
@@ -222,7 +274,7 @@ layout through the vote path (not for `preventSpawning` loads), once per round.
 | `!versus stats` | everyone | shares over the whole history (2v1 separately), plus one line per map (top 12) |
 | `!versus help` | everyone | command list (admin part for admins) |
 | `!versus set` | admin | list every key with value and range |
-| `!versus set <key> <value>` | admin | `enabled`, `announce`, `debug` (on/off), `window_rounds` (1..1000, `+N`/`-N`), `announce_delay_s`, `announce_repeat_s`, `ceiling_hvh` / `ceiling_hva` / `ceiling_hvhva` (0..1, `20%`, `none` = unlimited); also `!versus ceiling HvHvA 0.2` |
+| `!versus set <key> <value>` | admin | `enabled`, `announce`, `debug` (on/off), `window_rounds` (1..1000, `+N`/`-N`), `announce_delay_s`, `announce_repeat_s`, `ceiling_hvh` / `ceiling_hva` / `ceiling_hvhva` (0..1, `20%`, `none` = unlimited), `lone_money` (1..10, `x2` works) / `lone_units` (integer 1..10); also `!versus ceiling HvHvA 0.2` |
 | `!versus block <mode> [on\|off]` | admin | toggle / set a server-wide blocked layout |
 | `!versus mapblock [list]`, `add <map> <mode>`, `remove <map> [mode]` | admin | per-map exclusions (`<map>:<mode>` also works; `remove <map>` clears the map) |
 | `!versus 2v1 [list]`, `add <map>`, `remove <map>` | admin | 2v1 maps (alias `twovone`) |
@@ -254,4 +306,5 @@ Si_ModUI builder (copied from Si_WaspHarvest, Newtonsoft only).
 - The ceiling window counts rounds on all maps together, not per map.
 - 2v1 needs Si_Alliance's `AllianceApi` (added after Si_Alliance 0.2.2). The team names passed are "Sol" and
   "Centauri"; Si_Alliance resolves names / short names case-insensitively.
-- Not run live yet (0.2.0; 0.1.0 was not run live either).
+- 0.2.0's 2v1 path ran on the local test server on 2026-11-08 (one player, IndustrialQuarter: layout decided, alliance
+  OK after 1 attempt). The 0.3.0 lone-team compensation is not run live yet.
