@@ -71,7 +71,8 @@ namespace Si_VersusVote
                 // the two alien layouts share the HvA ceiling: own count plus the combined count/max ("8 (HvA 10/11)")
                 string window = Modes.IsHvA(m) ? s.Count + " (HvA " + s.CatCount + "/" + max + ")" : s.Count + "/" + max;
                 if (m == Modes.ThreeWay && ev.TwoVsOneInWindow > 0) window += " (2v1 " + ev.TwoVsOneInWindow + ")";
-                now.Add(new[] { name, ev.IsAllowed(m) ? "yes" : "no", ev.IsAllowed(m) ? (ev.CeilingIgnored && s.Block == BlockKind.None && s.Max >= 0 && s.CatCount >= s.Max ? "ceiling ignored" : "") : ev.Reason(m), window });
+                string okNote = ev.CeilingIgnored && s.Block == BlockKind.None && s.Max >= 0 && s.CatCount >= s.Max ? "ceiling ignored" : ev.WaivedText(m);
+                now.Add(new[] { name, ev.IsAllowed(m) ? "yes" : "no", ev.IsAllowed(m) ? okNote : ev.Reason(m), window });
             }
             x.Table("This round on " + (map.Length > 0 ? map : "?"), new[] { "Layout", "Counted", "Reason", "Last " + c.WindowRounds }, now.ToArray());
 
@@ -121,7 +122,7 @@ namespace Si_VersusVote
                         true, Edit.ShowCeiling(c, m));
             }
             x.Multi("/versus block", "Disabled on this server",
-                    "Highlighted layouts never count on this server. Click toggles. HvA = Sol vs Aliens and Centauri vs Aliens, SvA / CvA = one of them. Blocking HvHvA also blocks 2v1.", true,
+                    "Highlighted layouts never count on this server. Click toggles. HvA = Sol vs Aliens and Centauri vs Aliens, SvA / CvA = one of them. HvHvA does not block the 3-way button on 2v1 maps (it plays 2v1 there); remove a map from the 2v1 list to block it.", true,
                     string.Join(",", BlockedTokens(c.Blocked)), ("HvH", "HvH"), ("HvA", "HvA (both)"), ("SvA", "Sol vs Aliens"), ("CvA", "Centauri vs Aliens"), ("HvHvA", "HvHvA / 2v1"));
 
             var known = Maps.Known();
@@ -133,7 +134,7 @@ namespace Si_VersusVote
                     if (set == null || !Covered(set, tok)) addChoices.Add((mp + ":" + tok, mp + " - " + tok));
             }
             if (addChoices.Count > 0)
-                x.Picker("/versus mapblock add", "Exclude a layout on a map", "That layout never counts on that map. HvA = Sol vs Aliens and Centauri vs Aliens, SvA / CvA = one of them.", true, "choice", addChoices.ToArray());
+                x.Picker("/versus mapblock add", "Exclude a layout on a map", "That layout never counts on that map. HvA = Sol vs Aliens and Centauri vs Aliens, SvA / CvA = one of them. HvHvA on a 2v1 map does not block its 3-way button (it plays 2v1): to block 3-way there, remove the map from the 2v1 list and keep the HvHvA exclusion.", true, "choice", addChoices.ToArray());
             var removeChoices = new List<(string, string)>();
             foreach (var kv in c.MapBlockedModes.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
             {
@@ -145,10 +146,10 @@ namespace Si_VersusVote
 
             var twoAdd = known.Where(mp => !c.IsTwoVsOneMap(mp)).Select(mp => (mp, mp)).ToArray();
             if (twoAdd.Length > 0)
-                x.Picker("/versus 2v1 add", "Add a 2v1 map", "On that map the 3-way button plays Sol+Centauri allied vs Aliens (needs Si_Alliance).", true, "choice", twoAdd);
+                x.Picker("/versus 2v1 add", "Add a 2v1 map", "On that map the 3-way button plays Sol+Centauri allied vs Aliens (needs Si_Alliance). HvHvA exclusions do not block it there, only the HvHvA ceiling does.", true, "choice", twoAdd);
             var twoRemove = c.MapTwoVsOne.Select(mp => (mp, mp)).ToArray();
             if (twoRemove.Length > 0)
-                x.Picker("/versus 2v1 remove", "Remove a 2v1 map", "That map plays a normal 3-way again.", true, "choice", twoRemove);
+                x.Picker("/versus 2v1 remove", "Remove a 2v1 map", "That map plays a normal 3-way again (HvHvA exclusions apply to it again).", true, "choice", twoRemove);
 
             x.Value("/versus set lone_money", "2v1 lone team start money, x [1..10]",
                     "The lone team's (Aliens') starting resources are multiplied by this in a 2v1 round, granted once the alliance is confirmed. 1 = off.", true,

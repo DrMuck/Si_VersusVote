@@ -24,7 +24,8 @@ namespace Si_VersusVote
         /// <summary>Per map (mapcycle.txt spelling, case-insensitive): layouts that never count on that map.</summary>
         [JsonProperty("map_blocked_modes")] public Dictionary<string, List<string>> MapBlockedModes = new Dictionary<string, List<string>>();
         /// <summary>Maps where the 3-way button (HvHvA) is played as 2v1: Sol + Centauri allied (Si_Alliance) vs Aliens.
-        /// HvHvA rules (blocklists, ceiling) still apply to it: blocked HvHvA = no 2v1 either.</summary>
+        /// The HvHvA ceiling still applies to it; the HvHvA blocklist entries do not (0.3.2) while Si_Alliance is loaded -
+        /// to block 3-way on such a map, remove it from this list.</summary>
         [JsonProperty("map_two_vs_one")] public List<string> MapTwoVsOne = new List<string> { "IndustrialQuarter" };
         /// <summary>2v1 compensation for the lone team (the team outside the Sol + Centauri alliance, the Aliens).</summary>
         [JsonProperty("two_vs_one")] public TwoVsOneConfig TwoVsOne = new TwoVsOneConfig();

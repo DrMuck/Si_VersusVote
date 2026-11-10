@@ -189,7 +189,9 @@ namespace Si_VersusVote
             c.BlockedModes = Modes.Tokens(set);
             Commit(who, "blocked_modes " + name + " -> " + (want ? "blocked" : "allowed"));
             return name + (want ? " is now disabled on this server" : " is allowed again on this server") + " (saved, live)." +
-                   (want && ms.Contains(Modes.ThreeWay) && c.TwoVsOneMaps.Count > 0 ? " This also blocks 2v1." : "");
+                   (want && ms.Contains(Modes.ThreeWay) && c.MapTwoVsOne.Count > 0
+                       ? " The 2v1 maps (" + string.Join(", ", c.MapTwoVsOne) + ") keep their 3-way button as 2v1; remove a map from the 2v1 list to block it there."
+                       : "");
         }
 
         // ------------------------------------------------------------------ mapblock list|add|remove
@@ -227,7 +229,8 @@ namespace Si_VersusVote
                 c.MapBlockedModes[mapName] = Modes.Tokens(set);
                 Commit(who, "map_blocked_modes " + mapName + " + " + name);
                 Maps.Canonical(mapText, out bool known);
-                return name + " is now excluded on " + mapName + " (saved, live)." + (known || existingKey.Length > 0 ? "" : " Note: '" + mapName + "' is not a map this server knows - check the spelling.");
+                return name + " is now excluded on " + mapName + " (saved, live)." + (known || existingKey.Length > 0 ? "" : " Note: '" + mapName + "' is not a map this server knows - check the spelling.") +
+                       (ms.Contains(Modes.ThreeWay) && c.IsTwoVsOneMap(mapName) ? " " + Rules.TwoVsOneBlockNote(mapName, false) : "");
             }
             if (existingKey.Length == 0) return "No exclusions for " + mapText + ".";
             if (ms.Length == 0) set.Clear();
@@ -264,8 +267,11 @@ namespace Si_VersusVote
                 string name = Maps.Canonical(args[1], out bool known);
                 c.MapTwoVsOne.Add(name);
                 Commit(who, "map_two_vs_one + " + name);
+                c.MapBlocked.TryGetValue(key, out var mapSet);
+                bool mapEx = mapSet != null && mapSet.Contains(Modes.ThreeWay), serverEx = c.Blocked.Contains(Modes.ThreeWay);
                 return name + " is now a 2v1 map: its 3-way button plays Sol+Centauri allied vs Aliens (saved, applies from the next layout vote)." +
-                       (known ? "" : " Note: '" + name + "' is not a map this server knows - check the spelling.");
+                       (known ? "" : " Note: '" + name + "' is not a map this server knows - check the spelling.") +
+                       (mapEx || serverEx ? " " + Rules.TwoVsOneBlockNote(name, !mapEx) : "");
             }
             int n = c.MapTwoVsOne.RemoveAll(s => Modes.MapKey(s) == key);
             if (n == 0) return args[1] + " is not a 2v1 map.";

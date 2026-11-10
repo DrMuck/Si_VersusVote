@@ -31,6 +31,14 @@ Since 0.3.1:
 - **History compatibility.** New rows are written as `SvA` / `CvA`; rows written as `HvA` (= Sol vs Aliens) and
   `H2vA` (= Centauri vs Aliens) by older versions still load and count.
 
+Since 0.3.2:
+
+- **2v1 maps ignore HvHvA blocklists.** On a map in `map_two_vs_one` (with Si_Alliance loaded) the 3-way button plays
+  Sol + Centauri vs Aliens, which the admin chose by listing the map. HvHvA entries in `blocked_modes` and
+  `map_blocked_modes` no longer block it there; only the HvHvA ceiling does. Without Si_Alliance the button falls back
+  to a normal 3-way and the blocklists apply again. To block 3-way entirely on such a map, remove the map from the 2v1
+  list and keep the HvHvA exclusion.
+
 Optional companions: **Admin Mod** (chat commands, private voter notes; the filter works without it), **Si_Alliance**
 with `AllianceApi` (needed for 2v1), **Si_ModUI_Server** 1.6.x (the page), **Si_StarterUnits** 1.2.0 (lone-team starter
 unit multiplier).
@@ -116,10 +124,19 @@ On a map listed in `map_two_vs_one` (default `["IndustrialQuarter"]`, matched li
 - A plain HvHvA 3-way is not played. A 3-way vote, or vanilla's random 3-way pick, is a **2v1** request: the vanilla
   layout HUMANS_VS_HUMANS_VS_ALIENS is applied unchanged (so the vote works as usual and layout-dependent code sees 3
   teams), and the two human teams are allied for the whole round via Si_Alliance: Humans + Humans vs Aliens.
-- **Same button, same rules.** 2v1 is the HvHvA button. If HvHvA is blocked for that map by `blocked_modes`,
-  `map_blocked_modes` or its ceiling, 2v1 is blocked too and the votes are re-tallied as usual. When the filter lets
-  HvHvA stand (allowed, `enabled: false`, ceilings ignored, or blocklists excluding everything), 2v1 applies. The map
-  list itself is the 2v1 switch; `enabled` does not turn 2v1 off.
+- **Same button, own blocklist rule (0.3.2).** 2v1 is the HvHvA button. The HvHvA **ceiling** applies to it as to any
+  3-way (2v1 rounds count as HvHvA). The HvHvA entries of `blocked_modes` and `map_blocked_modes` do **not** apply to
+  it while Si_Alliance's AllianceApi is loaded: listing the map under 2v1 is the admin's explicit choice, and the button
+  never plays a free-for-all there. If Si_Alliance is missing, the button is a normal 3-way and the blocklists apply
+  again. **To block 3-way entirely on a map, remove it from `map_two_vs_one` and keep the HvHvA map exclusion.**
+  When the filter lets HvHvA stand (allowed, `enabled: false`, ceilings ignored, or blocklists excluding everything),
+  2v1 applies. The map list itself is the 2v1 switch; `enabled` does not turn 2v1 off.
+- **Visible override.** When an HvHvA block is overridden this way, `!versus` status and the ModUI page show
+  `HvHvA is excluded on Citadel, but Citadel is a 2v1 map: the 3-way button plays 2v1 and stays votable. Remove Citadel
+  from the 2v1 list to block it.` (server-wide: `HvHvA is disabled on this server, but ...`), and the ModUI "This
+  round" table shows `map exclusion HvHvA not applied (2v1 map)` in the Reason column of the 2v1 row. The same note is
+  the reply to `!versus mapblock add <2v1 map> HvHvA` and to `!versus 2v1 add <map>` on a map with such an exclusion;
+  `!versus block HvHvA` lists the 2v1 maps that keep their button.
 - **Ceilings and history.** A 2v1 round is recorded as mode `HvHvA` with `"two_vs_one": true`, so it counts toward the
   HvHvA ceiling. Status, stats and the ModUI page show the 2v1 rounds separately (`HvHvA 4/4 (2v1 1)`).
 - **Chat.** Vote-open line on such a map (sent even when nothing is blocked):
@@ -284,7 +301,7 @@ Example with per-map exclusions (no 3-way on the two small maps, HvH never on Ba
 | `announce` | false = no chat output (console log only); command replies still go to the caller |
 | `blocked_modes` | layouts that never count on this server (`HvA` = both alien layouts) |
 | `map_blocked_modes` | map -> layouts that never count there |
-| `map_two_vs_one` | maps where the 3-way button plays 2v1 (Sol + Centauri allied vs Aliens); empty = no 2v1 |
+| `map_two_vs_one` | maps where the 3-way button plays 2v1 (Sol + Centauri allied vs Aliens); HvHvA blocklist entries do not block it there (only the HvHvA ceiling); empty = no 2v1 |
 | `two_vs_one.lone_start_money_mult` | 2v1: lone team's starting resources x this (1..10, 1 = off), granted once the alliance is confirmed |
 | `two_vs_one.lone_starter_units_mult` | 2v1: Si_StarterUnits multiplies the lone team's starter unit counts by this integer (1..10, 1 = off) |
 | `ceilings` | category `HvHvA` / `HvA` / `HvH` -> max share of the window (0 = never, absent = unlimited); HvA counts Sol vs Aliens + Centauri vs Aliens together; 2v1 rounds count as HvHvA |
@@ -354,4 +371,5 @@ dotnet run -c Release [-- <path to a history.json>]   # exit code 0 = all checks
 - 2v1 needs Si_Alliance's `AllianceApi` (added after Si_Alliance 0.2.2). The team names passed are "Sol" and
   "Centauri"; Si_Alliance resolves names / short names case-insensitively.
 - 0.2.0's 2v1 path ran on the local test server on 2026-11-08 (one player, IndustrialQuarter: layout decided, alliance
-  OK after 1 attempt). The 0.3.0 lone-team compensation and the 0.3.1 four-button handling are not run live yet.
+  OK after 1 attempt). The 0.3.0 lone-team compensation, the 0.3.1 four-button handling and the 0.3.2 2v1 blocklist
+  rule are not run live yet.

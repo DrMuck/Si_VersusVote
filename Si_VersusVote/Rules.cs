@@ -13,6 +13,7 @@ namespace Si_VersusVote
         public int Count;         // rounds of this mode in the window
         public int CatCount;      // rounds of its ceiling category in the window (Sol vs Aliens + Centauri vs Aliens for both HvA layouts)
         public int Max;           // ceiling of the category; -1 = unlimited
+        public BlockKind Waived;  // a blocklist entry that would block it but does not apply (HvHvA on a 2v1 map): Server / Map, else None
     }
 
     /// <summary>Which layouts count this round, and why the others do not.</summary>
@@ -44,6 +45,26 @@ namespace Si_VersusVote
         {
             var parts = modes.Select(Display).ToList();
             return parts.Count == 0 ? "none" : string.Join(", ", parts);
+        }
+
+        /// <summary>
+        /// The 3-way button plays 2v1 and an HvHvA blocklist entry was not applied to it: "map exclusion HvHvA not applied
+        /// (2v1 map)" / "server block HvHvA not applied (2v1 map)"; "" otherwise.
+        /// </summary>
+        public string WaivedText(GameModeExt.ETeamsVersus m)
+        {
+            if (!Status.TryGetValue(m, out var s) || s.Waived == BlockKind.None) return "";
+            return (s.Waived == BlockKind.Map ? "map exclusion" : "server block") + " HvHvA not applied (2v1 map)";
+        }
+
+        /// <summary>
+        /// "HvHvA is excluded on Citadel, but Citadel is a 2v1 map: the 3-way button plays 2v1 and stays votable. Remove
+        /// Citadel from the 2v1 list to block it." when an HvHvA blocklist entry is waived this round; "" otherwise.
+        /// </summary>
+        public string WaivedNote()
+        {
+            if (!Status.TryGetValue(Modes.ThreeWay, out var s) || s.Waived == BlockKind.None) return "";
+            return Rules.TwoVsOneBlockNote(Map, s.Waived == BlockKind.Server);
         }
 
         public string Reason(GameModeExt.ETeamsVersus m)
@@ -102,12 +123,33 @@ namespace Si_VersusVote
 
     internal static class Rules
     {
-        public static Evaluation Evaluate(VersusConfig cfg, string map)
+        /// <summary>
+        /// Shared wording for status, ModUI and the admin edit replies: an HvHvA block that a 2v1 map overrides.
+        /// </summary>
+        public static string TwoVsOneBlockNote(string map, bool serverWide)
+        {
+            string m = string.IsNullOrEmpty(map) ? "this map" : map;
+            return "HvHvA is " + (serverWide ? "disabled on this server" : "excluded on " + m) + ", but " + m +
+                   " is a 2v1 map: the 3-way button plays 2v1 and stays votable. Remove " + m + " from the 2v1 list to block it.";
+        }
+
+        public static Evaluation Evaluate(VersusConfig cfg, string map) => Evaluate(cfg, map, null);
+
+        /// <summary>
+        /// <paramref name="allianceAvailable"/>: null = ask AllianceBridge (Si_Alliance loaded?); a value overrides it
+        /// (offline checks, tools/RulesCheck).
+        ///
+        /// 2v1 rule: when the round is 2v1 (2v1 map and Si_Alliance available) the HvHvA entries of blocked_modes and
+        /// map_blocked_modes do not apply to the 3-way button - it plays Sol + Centauri vs Aliens, which the admin chose
+        /// by listing the map in map_two_vs_one. Only the HvHvA ceiling still applies. Without Si_Alliance the button is
+        /// a normal 3-way and the blocklists apply as usual.
+        /// </summary>
+        internal static Evaluation Evaluate(VersusConfig cfg, string map, bool? allianceAvailable)
         {
             var ev = new Evaluation { Map = map ?? "", Window = cfg.WindowRounds };
             var counts = History.WindowCounts(cfg.WindowRounds, out ev.Seen, out ev.TwoVsOneInWindow);
             ev.TwoVsOneMap = cfg.IsTwoVsOneMap(map);
-            if (ev.TwoVsOneMap) ev.AllianceMissing = !AllianceBridge.Available;
+            if (ev.TwoVsOneMap) ev.AllianceMissing = !(allianceAvailable ?? AllianceBridge.Available);
             cfg.MapBlocked.TryGetValue(Modes.MapKey(map), out var mapSet);
 
             var ceilingHit = new HashSet<GameModeExt.ETeamsVersus>();
@@ -117,8 +159,15 @@ namespace Si_VersusVote
                 int cat = 0;
                 foreach (var cm in Modes.InCategory(m)) cat += counts[cm];
                 var s = new ModeStatus { Mode = m, Count = counts[m], CatCount = cat, Max = cfg.MaxFor(m) };
-                if (cfg.Blocked.Contains(m)) s.Block = BlockKind.Server;
-                else if (mapSet != null && mapSet.Contains(m)) s.Block = BlockKind.Map;
+                bool server = cfg.Blocked.Contains(m), onMap = mapSet != null && mapSet.Contains(m);
+                if (m == Modes.ThreeWay && ev.TwoVsOne && (server || onMap))
+                {
+                    // 2v1 round: the HvHvA blocklists do not apply to the 3-way button (see summary)
+                    s.Waived = onMap ? BlockKind.Map : BlockKind.Server;
+                    server = onMap = false;
+                }
+                if (server) s.Block = BlockKind.Server;
+                else if (onMap) s.Block = BlockKind.Map;
                 else if (s.Max >= 0 && s.CatCount >= s.Max) { s.Block = BlockKind.Ceiling; ceilingHit.Add(m); }
                 ev.Status[m] = s;
             }

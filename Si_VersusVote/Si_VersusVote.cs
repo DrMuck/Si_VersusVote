@@ -18,6 +18,9 @@
  3-way (3). Sol vs Aliens and Centauri vs Aliens form the category "HvA": one ceiling for both, "HvA" in a blocklist
  blocks both, "SvA" / "CvA" block one. History rows written as "H2vA" by older versions are Centauri vs Aliens.
 
+ 2v1 overrides HvHvA blocklists (0.3.2): in a 2v1 round (2v1 map + Si_Alliance loaded) the HvHvA entries of
+ blocked_modes / map_blocked_modes do not apply to the 3-way button; only the HvHvA ceiling does (Rules.Evaluate).
+
    !layout | !versus            status: counted / not counted this round, counts in the window, 2v1 state
    !versus stats                shares from the whole history (all maps + per map, 2v1 separately)
    !versus set | block | mapblock | 2v1 | save | reload | reset    admin (Power.Generic), see Commands.cs / Edit.cs
@@ -39,7 +42,7 @@ namespace Si_VersusVote
 {
     public class VersusVoteMod : MelonMod
     {
-        public const string Version = "0.3.1";
+        public const string Version = "0.3.2";
         internal const string Tag = "<color=#7FD4FF>[LAYOUT]</color> ";
         internal static VersusConfig Cfg = new VersusConfig();
 
@@ -184,6 +187,8 @@ namespace Si_VersusVote
             string w = ev.WindowText();
             if (ev.CeilingIgnored) w += " (ceilings ignored this round: they would leave no layout)";
             lines.Add(w);
+            string waived = ev.WaivedNote();
+            if (waived.Length > 0) lines.Add(waived);
             lines.Add(TwoVsOneStatus(ev));
             string comp = CompensationStatus(ev);
             if (comp.Length > 0) lines.Add(comp);
