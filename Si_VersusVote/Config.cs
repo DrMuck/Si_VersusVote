@@ -8,14 +8,18 @@ using Newtonsoft.Json;
 
 namespace Si_VersusVote
 {
-    /// <summary>UserData/cfg/VersusVote/Si_VersusVote_Config.json. Mode names: HvH, HvA, HvHvA (alias 3way / 3-way), H2vA or the enum names.</summary>
+    /// <summary>
+    /// UserData/cfg/VersusVote/Si_VersusVote_Config.json. Layout names: HvH, HvA (Sol vs Aliens AND Centauri vs Aliens),
+    /// SvA, CvA (alias H2vA), HvHvA (alias 3way / 3-way) or the enum names. Ceilings are per category: HvH, HvA (both
+    /// alien layouts counted together), HvHvA.
+    /// </summary>
     public class VersusConfig
     {
         /// <summary>Master switch: false = the vote result is never touched (history is still recorded).</summary>
         [JsonProperty("enabled")] public bool Enabled = true;
         /// <summary>false = no chat output at all (console log only).</summary>
         [JsonProperty("announce")] public bool Announce = true;
-        /// <summary>Layouts that never count on this server.</summary>
+        /// <summary>Layouts that never count on this server ("HvA" = both alien layouts, "SvA" / "CvA" = one of them).</summary>
         [JsonProperty("blocked_modes")] public List<string> BlockedModes = new List<string>();
         /// <summary>Per map (mapcycle.txt spelling, case-insensitive): layouts that never count on that map.</summary>
         [JsonProperty("map_blocked_modes")] public Dictionary<string, List<string>> MapBlockedModes = new Dictionary<string, List<string>>();
@@ -24,7 +28,8 @@ namespace Si_VersusVote
         [JsonProperty("map_two_vs_one")] public List<string> MapTwoVsOne = new List<string> { "IndustrialQuarter" };
         /// <summary>2v1 compensation for the lone team (the team outside the Sol + Centauri alliance, the Aliens).</summary>
         [JsonProperty("two_vs_one")] public TwoVsOneConfig TwoVsOne = new TwoVsOneConfig();
-        /// <summary>Max share of the last window_rounds rounds per layout (0 = never, absent = unlimited).</summary>
+        /// <summary>Max share of the last window_rounds rounds per category HvHvA / HvA / HvH (0 = never, absent = unlimited).
+        /// HvA counts Sol vs Aliens and Centauri vs Aliens together.</summary>
         [JsonProperty("ceilings")] public Dictionary<string, double> Ceilings = new Dictionary<string, double>
         {
             { "HvHvA", 0.20 },
@@ -44,6 +49,7 @@ namespace Si_VersusVote
         // ------------------------------------------------------------------ parsed (not serialized)
         [JsonIgnore] public HashSet<GameModeExt.ETeamsVersus> Blocked = new HashSet<GameModeExt.ETeamsVersus>();
         [JsonIgnore] public Dictionary<string, HashSet<GameModeExt.ETeamsVersus>> MapBlocked = new Dictionary<string, HashSet<GameModeExt.ETeamsVersus>>();
+        /// <summary>Ceiling per category (key = Modes.Category: HvH 1, HvA 2, HvHvA 3).</summary>
         [JsonIgnore] public Dictionary<GameModeExt.ETeamsVersus, double> CeilingOf = new Dictionary<GameModeExt.ETeamsVersus, double>();
         [JsonIgnore] public HashSet<string> TwoVsOneMaps = new HashSet<string>();
 
@@ -133,8 +139,8 @@ namespace Si_VersusVote
             Blocked = new HashSet<GameModeExt.ETeamsVersus>();
             foreach (string s in BlockedModes)
             {
-                if (Modes.TryParse(s, out var m)) Blocked.Add(m);
-                else MelonLogger.Warning("[VERSUS] blocked_modes: unknown layout '" + s + "' ignored (use HvH, HvA, HvHvA, H2vA)");
+                if (Modes.TryParseSet(s, out var ms)) Blocked.UnionWith(ms);
+                else MelonLogger.Warning("[VERSUS] blocked_modes: unknown layout '" + s + "' ignored (use " + Modes.NamesHelp + ")");
             }
 
             MapBlocked = new Dictionary<string, HashSet<GameModeExt.ETeamsVersus>>();
@@ -145,8 +151,8 @@ namespace Si_VersusVote
                 if (!MapBlocked.TryGetValue(key, out var set)) { set = new HashSet<GameModeExt.ETeamsVersus>(); MapBlocked[key] = set; }
                 foreach (string s in kv.Value)
                 {
-                    if (Modes.TryParse(s, out var m)) set.Add(m);
-                    else MelonLogger.Warning("[VERSUS] map_blocked_modes[" + kv.Key + "]: unknown layout '" + s + "' ignored");
+                    if (Modes.TryParseSet(s, out var ms)) set.UnionWith(ms);
+                    else MelonLogger.Warning("[VERSUS] map_blocked_modes[" + kv.Key + "]: unknown layout '" + s + "' ignored (use " + Modes.NamesHelp + ")");
                 }
             }
 
@@ -157,7 +163,13 @@ namespace Si_VersusVote
             CeilingOf = new Dictionary<GameModeExt.ETeamsVersus, double>();
             foreach (var kv in Ceilings)
             {
-                if (!Modes.TryParse(kv.Key, out var m)) { MelonLogger.Warning("[VERSUS] ceilings: unknown layout '" + kv.Key + "' ignored"); continue; }
+                if (!Modes.TryParseCategory(kv.Key, out var m))
+                {
+                    MelonLogger.Warning("[VERSUS] ceilings: '" + kv.Key + "' ignored - " + (Modes.TryParseSet(kv.Key, out _)
+                        ? "Sol vs Aliens and Centauri vs Aliens share the HvA ceiling (no ceiling of their own)"
+                        : "unknown category (use HvHvA, HvA, HvH)"));
+                    continue;
+                }
                 double c = kv.Value;
                 if (double.IsNaN(c) || c < 0) c = 0;
                 if (c >= 1) continue;   // 1.0 or more = no limit
@@ -165,10 +177,13 @@ namespace Si_VersusVote
             }
         }
 
-        /// <summary>Max rounds of mode m in the window; -1 = unlimited. ceiling 0 = 0, else max(1, round(ceiling * window)).</summary>
+        /// <summary>
+        /// Max rounds of m's category in the window (HvA: Sol vs Aliens + Centauri vs Aliens together); -1 = unlimited.
+        /// ceiling 0 = 0, else max(1, round(ceiling * window)).
+        /// </summary>
         public int MaxFor(GameModeExt.ETeamsVersus m)
         {
-            if (!CeilingOf.TryGetValue(m, out double c)) return -1;
+            if (!CeilingOf.TryGetValue(Modes.Category(m), out double c)) return -1;
             if (c <= 0) return 0;
             return Math.Max(1, (int)Math.Round(c * WindowRounds, MidpointRounding.AwayFromZero));
         }
@@ -176,13 +191,12 @@ namespace Si_VersusVote
         public string Summary()
         {
             var parts = new List<string>();
-            foreach (var m in Modes.All)
+            foreach (var m in Modes.Categories)
             {
                 int max = MaxFor(m);
-                if (max >= 0) parts.Add(Modes.Short(m) + " " + max + "/" + WindowRounds);
+                if (max >= 0) parts.Add(Modes.CategoryShort(m) + " " + max + "/" + WindowRounds);
             }
-            var blocked = new List<string>();
-            foreach (var m in Blocked) blocked.Add(Modes.Short(m));
+            var blocked = Modes.Tokens(Blocked);
             return "enabled " + Enabled + ", announce " + Announce + ", ceilings [" + string.Join(", ", parts) + "], blocked [" + string.Join(", ", blocked) +
                    "], map rules " + MapBlocked.Count.ToString(CultureInfo.InvariantCulture) + ", 2v1 maps [" + string.Join(", ", MapTwoVsOne) + "], 2v1 lone team: " +
                    TwoVsOne.Summary();

@@ -14,6 +14,10 @@
  (LoneBonus.cs, after the vanilla grant in MP_Strategy.SpawnStructuresAndStartingResources, only once the alliance is
  confirmed), and VersusApi v2 (LoneTeam, LoneStarterUnitsMult, IsLoneTeam) for Si_StarterUnits.
 
+ Four buttons (0.3.1): the vote screen offers HvH (1, Sol vs Centauri), Sol vs Aliens (2), Centauri vs Aliens (4) and
+ 3-way (3). Sol vs Aliens and Centauri vs Aliens form the category "HvA": one ceiling for both, "HvA" in a blocklist
+ blocks both, "SvA" / "CvA" block one. History rows written as "H2vA" by older versions are Centauri vs Aliens.
+
    !layout | !versus            status: counted / not counted this round, counts in the window, 2v1 state
    !versus stats                shares from the whole history (all maps + per map, 2v1 separately)
    !versus set | block | mapblock | 2v1 | save | reload | reset    admin (Power.Generic), see Commands.cs / Edit.cs
@@ -35,7 +39,7 @@ namespace Si_VersusVote
 {
     public class VersusVoteMod : MelonMod
     {
-        public const string Version = "0.3.0";
+        public const string Version = "0.3.1";
         internal const string Tag = "<color=#7FD4FF>[LAYOUT]</color> ";
         internal static VersusConfig Cfg = new VersusConfig();
 
@@ -147,8 +151,8 @@ namespace Si_VersusVote
         internal const string TwoVsOneHint = "3-way button = Sol+Centauri allied vs Aliens";
 
         /// <summary>
-        /// "Layout vote - counted this round: A, B, 2v1 (3-way button = ...). Not counted: C (reason)". Empty when every
-        /// layout counts and the 3-way button means a normal 3-way.
+        /// "Layout vote - counted this round: Humans vs Humans, Sol vs Aliens, Centauri vs Aliens. Not counted: 3-way
+        /// (ceiling 4/20 reached)". Empty when every layout counts and the 3-way button means a normal 3-way.
         /// </summary>
         internal static string VoteOpenLine(Evaluation ev)
         {
@@ -159,7 +163,7 @@ namespace Si_VersusVote
                                                         ? "2v1 (" + TwoVsOneHint + ")" : ev.Display(m)).ToList();
             string line = "Layout vote - counted this round: " + (counted.Count == 0 ? "none" : string.Join(", ", counted));
             if (blocked.Count > 0)
-                line += ". Not counted: " + string.Join(", ", blocked.Select(m => ev.Display(m) + " (" + ev.Reason(m) + ")"));
+                line += ". Not counted: " + ev.NotCountedText(blocked);
             return line;
         }
 
@@ -175,7 +179,7 @@ namespace Si_VersusVote
             var blocked = ev.BlockedVotable;
             string line = head + "counted: " + ev.JoinDisplay(ev.AllowedVotable);
             if (blocked.Count > 0)
-                line += " | not counted: " + string.Join(", ", blocked.Select(m => ev.Display(m) + " (" + ev.Reason(m) + ")"));
+                line += " | not counted: " + ev.NotCountedText(blocked);
             lines.Add(line);
             string w = ev.WindowText();
             if (ev.CeilingIgnored) w += " (ceilings ignored this round: they would leave no layout)";

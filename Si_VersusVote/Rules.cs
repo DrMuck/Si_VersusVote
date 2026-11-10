@@ -11,7 +11,8 @@ namespace Si_VersusVote
         public GameModeExt.ETeamsVersus Mode;
         public BlockKind Block;   // the reason that actually applies this round (None = counted)
         public int Count;         // rounds of this mode in the window
-        public int Max;           // -1 = unlimited
+        public int CatCount;      // rounds of its ceiling category in the window (Sol vs Aliens + Centauri vs Aliens for both HvA layouts)
+        public int Max;           // ceiling of the category; -1 = unlimited
     }
 
     /// <summary>Which layouts count this round, and why the others do not.</summary>
@@ -31,7 +32,7 @@ namespace Si_VersusVote
         public bool IsAllowed(GameModeExt.ETeamsVersus m)
             => FilterOff || !Status.TryGetValue(m, out var s) || s.Block == BlockKind.None;
 
-        /// <summary>Allowed votable layouts (HvH, HvA, HvHvA), in enum order.</summary>
+        /// <summary>Allowed vote-screen layouts (HvH, SvA, CvA, HvHvA), in button order.</summary>
         public List<GameModeExt.ETeamsVersus> AllowedVotable => Modes.Votable.Where(IsAllowed).ToList();
         public List<GameModeExt.ETeamsVersus> BlockedVotable => Modes.Votable.Where(m => !IsAllowed(m)).ToList();
 
@@ -52,22 +53,46 @@ namespace Si_VersusVote
             {
                 case BlockKind.Server: return "disabled on this server";
                 case BlockKind.Map: return "excluded on this map";
-                case BlockKind.Ceiling: return s.Max == 0 ? "ceiling 0/" + Window + ", never counted" : "ceiling " + s.Max + "/" + Window + " reached";
+                case BlockKind.Ceiling:
+                    if (s.Max == 0) return "ceiling 0/" + Window + ", never counted";
+                    return "ceiling " + s.Max + "/" + Window + " reached" + (Modes.IsHvA(m) ? ", Sol + Centauri vs Aliens together" : "");
                 default: return "";
             }
         }
 
-        /// <summary>"last 20: HvHvA 4/4, HvA 7/10, HvH 5/6" (count/max, "-" = unlimited).</summary>
+        /// <summary>
+        /// "Sol vs Aliens (excluded on this map), 3-way (ceiling 4/20 reached)". Sol vs Aliens and Centauri vs Aliens
+        /// blocked for the same reason are one entry: "Sol + Centauri vs Aliens (ceiling 11/20 reached together)".
+        /// </summary>
+        public string NotCountedText(IList<GameModeExt.ETeamsVersus> blocked)
+        {
+            var parts = new List<string>();
+            bool both = blocked.Contains(Modes.SvA) && blocked.Contains(Modes.CvA) && Reason(Modes.SvA) == Reason(Modes.CvA);
+            foreach (var m in blocked)
+            {
+                if (both && m == Modes.CvA) continue;
+                if (both && m == Modes.SvA)
+                {
+                    var s = Status[m];
+                    string why = s.Block == BlockKind.Ceiling && s.Max > 0 ? "ceiling " + s.Max + "/" + Window + " reached together" : Reason(m);
+                    parts.Add("Sol + Centauri vs Aliens (" + why + ")");
+                    continue;
+                }
+                parts.Add(Display(m) + " (" + Reason(m) + ")");
+            }
+            return string.Join(", ", parts);
+        }
+
+        /// <summary>"last 20: HvHvA 4/6 (2v1 1), HvA 10/11 (Sol 8, Cent 2), HvH 6/7" (count/max, "-" = unlimited).</summary>
         public string WindowText()
         {
             var parts = new List<string>();
-            foreach (var m in new[] { GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS, GameModeExt.ETeamsVersus.HUMANS_VS_ALIENS,
-                                      GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS, GameModeExt.ETeamsVersus.HUMANS2_VS_ALIENS })
+            foreach (var cat in Modes.Categories)
             {
-                var s = Status[m];
-                if (m == GameModeExt.ETeamsVersus.HUMANS2_VS_ALIENS && s.Count == 0 && s.Max < 0) continue;
-                string part = Modes.Short(m) + " " + s.Count + "/" + (s.Max < 0 ? "-" : s.Max.ToString());
-                if (m == GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS && TwoVsOneInWindow > 0) part += " (2v1 " + TwoVsOneInWindow + ")";
+                var s = Status[cat];
+                string part = Modes.CategoryShort(cat) + " " + s.CatCount + "/" + (s.Max < 0 ? "-" : s.Max.ToString());
+                if (cat == Modes.ThreeWay && TwoVsOneInWindow > 0) part += " (2v1 " + TwoVsOneInWindow + ")";
+                if (cat == Modes.SvA && s.CatCount > 0) part += " (Sol " + Status[Modes.SvA].Count + ", Cent " + Status[Modes.CvA].Count + ")";
                 parts.Add(part);
             }
             string head = Seen >= Window ? "last " + Window : "last " + Seen + " (window " + Window + ")";
@@ -88,10 +113,13 @@ namespace Si_VersusVote
             var ceilingHit = new HashSet<GameModeExt.ETeamsVersus>();
             foreach (var m in Modes.All)
             {
-                var s = new ModeStatus { Mode = m, Count = counts[m], Max = cfg.MaxFor(m) };
+                // HvA ceiling: Sol vs Aliens and Centauri vs Aliens are counted together against one max
+                int cat = 0;
+                foreach (var cm in Modes.InCategory(m)) cat += counts[cm];
+                var s = new ModeStatus { Mode = m, Count = counts[m], CatCount = cat, Max = cfg.MaxFor(m) };
                 if (cfg.Blocked.Contains(m)) s.Block = BlockKind.Server;
                 else if (mapSet != null && mapSet.Contains(m)) s.Block = BlockKind.Map;
-                else if (s.Max >= 0 && s.Count >= s.Max) { s.Block = BlockKind.Ceiling; ceilingHit.Add(m); }
+                else if (s.Max >= 0 && s.CatCount >= s.Max) { s.Block = BlockKind.Ceiling; ceilingHit.Add(m); }
                 ev.Status[m] = s;
             }
 
@@ -110,7 +138,8 @@ namespace Si_VersusVote
 
         /// <summary>
         /// Re-tally of the vote counting only allowed layouts: most votes wins, ties random; no allowed vote = random allowed
-        /// votable layout (vanilla: Random.Range(1,4)). TeamsVersusVotes is only read, never modified.
+        /// vote-screen layout, Centauri vs Aliens included (vanilla's own zero-vote pick is Random.Range(1,4) = 1..3).
+        /// TeamsVersusVotes is only read, never modified.
         /// </summary>
         public static GameModeExt.ETeamsVersus Retally(Evaluation ev, Dictionary<Player, GameModeExt.ETeamsVersus>? votes, out int winnerVotes)
         {

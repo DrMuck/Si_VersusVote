@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Offline sanity check of the layout rules (no game needed): dotnet run -c Release
+       Loads the built test-branch Si_VersusVote.dll and calls its internals by reflection. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <MSBuildWarningsAsMessages>MSB3277;MSB3270</MSBuildWarningsAsMessages>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="..\..\Si_VersusVote\bin\Release\netstandard2.1\Si_VersusVote.dll" />
+    <Reference Include="..\..\include\test\SilicaCore.dll" />
+    <Reference Include="..\..\include\test\MelonLoader.dll" />
+    <Reference Include="..\..\include\test\Newtonsoft.Json.dll" />
+    <Reference Include="..\..\include\test\UnityEngine.CoreModule.dll" />
+  </ItemGroup>
+</Project>

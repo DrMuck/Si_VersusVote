@@ -11,6 +11,7 @@ namespace Si_VersusVote
     {
         [JsonProperty("utc")] public string Utc = "";
         [JsonProperty("map")] public string Map = "";
+        /// <summary>Modes.Short: HvH, SvA, CvA, HvHvA. Older rows: "HvA" (= SvA, enum 2) and "H2vA" (= CvA, enum 4) still parse.</summary>
         [JsonProperty("mode")] public string Mode = "";
         /// <summary>An HvHvA round played as 2v1 (Sol + Centauri allied vs Aliens); counts toward the HvHvA ceiling.</summary>
         [JsonProperty("two_vs_one", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool TwoVsOne;
@@ -99,7 +100,7 @@ namespace Si_VersusVote
             catch (Exception ex) { MelonLogger.Warning("[VERSUS] History save failed: " + ex.Message); }
         }
 
-        /// <summary>Count per mode over the last <paramref name="window"/> rounds (all maps). <paramref name="seen"/> = rounds actually in the window.</summary>
+        /// <summary>Count per layout (1..4) over the last <paramref name="window"/> rounds (all maps). <paramref name="seen"/> = rounds actually in the window.</summary>
         public static Dictionary<GameModeExt.ETeamsVersus, int> WindowCounts(int window, out int seen) => WindowCounts(window, out seen, out _);
 
         /// <summary>Same, plus the 2v1 rounds in the window (they are also counted as HvHvA).</summary>

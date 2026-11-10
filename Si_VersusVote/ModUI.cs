@@ -66,10 +66,12 @@ namespace Si_VersusVote
             foreach (var m in Modes.Votable)
             {
                 var s = ev.Status[m];
-                string name = m == GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS && ev.TwoVsOne ? "2v1 (3-way button)" : Modes.Display(m);
-                string window = s.Count + "/" + (s.Max < 0 ? "-" : s.Max.ToString(Inv));
-                if (m == GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS && ev.TwoVsOneInWindow > 0) window += " (2v1 " + ev.TwoVsOneInWindow + ")";
-                now.Add(new[] { name, ev.IsAllowed(m) ? "yes" : "no", ev.IsAllowed(m) ? (ev.CeilingIgnored && s.Block == BlockKind.None && s.Max >= 0 && s.Count >= s.Max ? "ceiling ignored" : "") : ev.Reason(m), window });
+                string name = m == Modes.ThreeWay && ev.TwoVsOne ? "2v1 (3-way button)" : Modes.Display(m);
+                string max = s.Max < 0 ? "-" : s.Max.ToString(Inv);
+                // the two alien layouts share the HvA ceiling: own count plus the combined count/max ("8 (HvA 10/11)")
+                string window = Modes.IsHvA(m) ? s.Count + " (HvA " + s.CatCount + "/" + max + ")" : s.Count + "/" + max;
+                if (m == Modes.ThreeWay && ev.TwoVsOneInWindow > 0) window += " (2v1 " + ev.TwoVsOneInWindow + ")";
+                now.Add(new[] { name, ev.IsAllowed(m) ? "yes" : "no", ev.IsAllowed(m) ? (ev.CeilingIgnored && s.Block == BlockKind.None && s.Max >= 0 && s.CatCount >= s.Max ? "ceiling ignored" : "") : ev.Reason(m), window });
             }
             x.Table("This round on " + (map.Length > 0 ? map : "?"), new[] { "Layout", "Counted", "Reason", "Last " + c.WindowRounds }, now.ToArray());
 
@@ -77,12 +79,16 @@ namespace Si_VersusVote
             if (rounds.Count > 0)
             {
                 var rows = new List<string[]>();
-                foreach (var m in Modes.All)
+                int hva = 0;
+                foreach (var m in new[] { Modes.HvH, Modes.SvA, Modes.CvA })
                 {
                     int n = rounds.Count(r => r.Parsed == m);
-                    if (n == 0 && m == GameModeExt.ETeamsVersus.HUMANS2_VS_ALIENS) continue;
-                    rows.Add(new[] { Modes.Short(m), n.ToString(Inv), Pct(n, rounds.Count) });
+                    if (Modes.IsHvA(m)) hva += n;
+                    rows.Add(new[] { m == Modes.HvH ? "HvH" : Modes.Display(m), n.ToString(Inv), Pct(n, rounds.Count) });
                 }
+                rows.Add(new[] { "Humans vs Aliens total", hva.ToString(Inv), Pct(hva, rounds.Count) });
+                int three = rounds.Count(r => r.Parsed == Modes.ThreeWay);
+                rows.Add(new[] { "HvHvA", three.ToString(Inv), Pct(three, rounds.Count) });
                 int two = rounds.Count(r => r.TwoVsOne);
                 if (two > 0 || c.MapTwoVsOne.Count > 0) rows.Add(new[] { "of which 2v1", two.ToString(Inv), Pct(two, rounds.Count) });
                 x.Table("All " + rounds.Count + " rounds since " + rounds[0].Utc.Split('T')[0], new[] { "Layout", "Rounds", "Share" }, rows.ToArray());
@@ -92,43 +98,48 @@ namespace Si_VersusVote
                                             .OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
                                             .Select(kv => new[] { kv.Key, string.Join(", ", kv.Value) }).ToArray();
             if (mapRules.Length > 0) x.Table("Per-map exclusions", new[] { "Map", "Not counted" }, mapRules);
-            x.Info("Server-wide disabled: " + (c.Blocked.Count == 0 ? "none" : string.Join(", ", c.Blocked.Select(Modes.Short))) +
+            x.Info("Server-wide disabled: " + (c.Blocked.Count == 0 ? "none" : string.Join(", ", Modes.Tokens(c.Blocked))) +
                    " | 2v1 maps: " + (c.MapTwoVsOne.Count == 0 ? "none" : string.Join(", ", c.MapTwoVsOne)));
 
-            x.Report("/versus", "Status", "Which layouts count this round and why, the window counts and the 2v1 state.");
-            x.Report("/versus stats", "Statistics", "Layout shares over the whole history, all maps and per map, 2v1 separately.");
+            x.Report("/versus", "Status", "Which of the four layouts (Humans vs Humans, Sol vs Aliens, Centauri vs Aliens, 3-way) count this round and why, the window counts and the 2v1 state. Sol vs Aliens and Centauri vs Aliens share the HvA ceiling.");
+            x.Report("/versus stats", "Statistics", "Layout shares over the whole history, all maps and per map: HvA = Sol vs Aliens + Centauri vs Aliens, 2v1 separately.");
             x.Report("/versus help", "Help", "The !versus commands.");
 
             // ---------------- admins (a: true; the handler checks Power.Generic again)
             x.OnOff("/versus set enabled", "Layout filter", "Master switch: off = the vote result is never replaced (history and 2v1 keep working).", true, c.Enabled);
             x.OnOff("/versus set announce", "Chat announcements", "Vote-open line, replacement line and private voter notes.", true, c.Announce);
             x.Value("/versus set window_rounds", "Ceiling window, rounds [1..1000]", "How many recent rounds (all maps) the ceilings look at.", true, c.WindowRounds.ToString(Inv));
-            foreach (var m in new[] { GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS, GameModeExt.ETeamsVersus.HUMANS_VS_ALIENS, GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS })
+            foreach (var m in Modes.Categories)
             {
                 int max = c.MaxFor(m);
-                string label = "Ceiling " + Modes.Short(m) + (m == GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS ? " / 2v1" : "") +
+                string name = Modes.CategoryShort(m);
+                string label = "Ceiling " + name + (m == Modes.ThreeWay ? " / 2v1" : m == Modes.SvA ? " (Sol vs Aliens + Centauri vs Aliens together)" : "") +
                                " [0..1 or none] (max " + (max < 0 ? "unlimited" : max + "/" + c.WindowRounds) + ")";
-                x.Value("/versus set ceiling_" + Modes.Short(m).ToLowerInvariant(), label,
+                x.Value("/versus set ceiling_" + name.ToLowerInvariant(), label,
                         "Max share of the last window_rounds rounds. 0 = never, none = unlimited, 20% also works." +
-                        (m == GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS ? " 2v1 rounds count here." : ""), true, Edit.ShowCeiling(c, m));
+                        (m == Modes.ThreeWay ? " 2v1 rounds count here." : m == Modes.SvA ? " One limit for both alien layouts: Sol vs Aliens and Centauri vs Aliens rounds are added up." : ""),
+                        true, Edit.ShowCeiling(c, m));
             }
-            x.Multi("/versus block", "Disabled on this server", "Highlighted layouts never count on this server. Click toggles. Blocking HvHvA also blocks 2v1.", true,
-                    string.Join(",", c.Blocked.Select(Modes.Short)), ("HvH", "HvH"), ("HvA", "HvA"), ("HvHvA", "HvHvA / 2v1"));
+            x.Multi("/versus block", "Disabled on this server",
+                    "Highlighted layouts never count on this server. Click toggles. HvA = Sol vs Aliens and Centauri vs Aliens, SvA / CvA = one of them. Blocking HvHvA also blocks 2v1.", true,
+                    string.Join(",", BlockedTokens(c.Blocked)), ("HvH", "HvH"), ("HvA", "HvA (both)"), ("SvA", "Sol vs Aliens"), ("CvA", "Centauri vs Aliens"), ("HvHvA", "HvHvA / 2v1"));
 
             var known = Maps.Known();
             var addChoices = new List<(string, string)>();
             foreach (string mp in known)
             {
                 c.MapBlocked.TryGetValue(Modes.MapKey(mp), out var set);
-                foreach (var m in Modes.Votable)
-                    if (set == null || !set.Contains(m)) addChoices.Add((mp + ":" + Modes.Short(m), mp + " - " + Modes.Short(m)));
+                foreach (string tok in Modes.BlockTokens)
+                    if (set == null || !Covered(set, tok)) addChoices.Add((mp + ":" + tok, mp + " - " + tok));
             }
             if (addChoices.Count > 0)
-                x.Picker("/versus mapblock add", "Exclude a layout on a map", "That layout never counts on that map.", true, "choice", addChoices.ToArray());
+                x.Picker("/versus mapblock add", "Exclude a layout on a map", "That layout never counts on that map. HvA = Sol vs Aliens and Centauri vs Aliens, SvA / CvA = one of them.", true, "choice", addChoices.ToArray());
             var removeChoices = new List<(string, string)>();
             foreach (var kv in c.MapBlockedModes.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase))
-                foreach (string md in kv.Value ?? new List<string>())
-                    if (Modes.TryParse(md, out var pm)) removeChoices.Add((kv.Key + ":" + Modes.Short(pm), kv.Key + " - " + Modes.Short(pm)));
+            {
+                if (!c.MapBlocked.TryGetValue(Modes.MapKey(kv.Key), out var set)) continue;
+                foreach (string tok in BlockedTokens(set)) removeChoices.Add((kv.Key + ":" + tok, kv.Key + " - " + tok));
+            }
             if (removeChoices.Count > 0)
                 x.Picker("/versus mapblock remove", "Remove a map exclusion", "The layout counts on that map again (ceilings still apply).", true, "choice", removeChoices.ToArray());
 
@@ -156,5 +167,13 @@ namespace Si_VersusVote
         }
 
         static string Pct(int n, int total) => (100.0 * n / Math.Max(1, total)).ToString("0", Inv) + "%";
+
+        /// <summary>Every layout of the token is in the set (HvA needs both alien layouts).</summary>
+        static bool Covered(ICollection<GameModeExt.ETeamsVersus> set, string token)
+            => Modes.TryParseSet(token, out var ms) && ms.All(set.Contains);
+
+        /// <summary>The block tokens fully covered by the set (HvA blocked = HvA, SvA and CvA highlighted / removable).</summary>
+        static List<string> BlockedTokens(ICollection<GameModeExt.ETeamsVersus> set)
+            => Modes.BlockTokens.Where(t => Covered(set, t)).ToList();
     }
 }

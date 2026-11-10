@@ -20,6 +20,17 @@ Since 0.3.0:
   x `lone_start_money_mult` (default 2.0), and Si_StarterUnits 1.2.0 multiplies its starter unit counts by
   `lone_starter_units_mult` (default 2). `VersusApi` v2 exposes the lone team and both multipliers.
 
+Since 0.3.1:
+
+- **Four layout buttons.** The vanilla Battle Layout screen has four buttons, not three: Cent vs Sol (HvH, enum 1),
+  Alien vs Sol (**SvA**, enum 2), Alien vs Cent (**CvA**, enum 4) and Sol vs Cent vs Alien (HvHvA, enum 3). Up to 0.3.0
+  the mod treated enum 4 as a stub ("H2vA"): not counted, no ceiling, never in the random pool. It is a plain two-team
+  round Centauri vs Aliens and is now handled like the others.
+- **Category HvA** = Sol vs Aliens + Centauri vs Aliens. The `HvA` ceiling limits both together; `HvA` in a blocklist
+  blocks both, `SvA` / `CvA` block one of them. Existing config files keep working unchanged.
+- **History compatibility.** New rows are written as `SvA` / `CvA`; rows written as `HvA` (= Sol vs Aliens) and
+  `H2vA` (= Centauri vs Aliens) by older versions still load and count.
+
 Optional companions: **Admin Mod** (chat commands, private voter notes; the filter works without it), **Si_Alliance**
 with `AllianceApi` (needed for 2v1), **Si_ModUI_Server** 1.6.x (the page), **Si_StarterUnits** 1.2.0 (lone-team starter
 unit multiplier).
@@ -35,11 +46,20 @@ Decompile of SilicaCore 1.0.15 (`MP_Strategy.cs`, `GameModeExt.cs`):
   `RPC_VoteTeamVersus(Player, ETeamsVersus)`.
 - The vote countdown only runs while `TeamsVersusVotes.Count > 0`. When it reaches 0 the server calls
   `SetTeamVersusMode(GetTeamsVersusVoteResult())`: most votes wins, ties by coin flip, no votes = `Random.Range(1,4)`
-  (HvH, HvA or HvHvA).
+  (HvH, Sol vs Aliens or HvHvA - never Centauri vs Aliens, which only comes from real votes).
 - `SetTeamVersusMode` only stores the layout, sets `QueueCoopSpawnBaseStructures` and syncs; the HQs / Nests are
   spawned later from that queue.
-- `ETeamsVersus`: NONE=0, HUMANS_VS_HUMANS=1 (HvH), HUMANS_VS_ALIENS=2 (HvA), HUMANS_VS_HUMANS_VS_ALIENS=3 (HvHvA,
-  "3-way"), HUMANS2_VS_ALIENS=4 (H2vA, a stub: not on the vote screen, no UI). The mod never applies H2vA.
+- The screen has **four** buttons (client prefab): "Cent vs Sol" = HUMANS_VS_HUMANS (1), "Alien vs Sol" =
+  HUMANS_VS_ALIENS (2), "Alien vs Cent" = HUMANS2_VS_ALIENS (4), "Sol vs Cent vs Alien" = HUMANS_VS_HUMANS_VS_ALIENS (3).
+  The teams come from the map's team setups (`BaseTeamSetup.ForTeamVersusModes`): Sol {1,2,3}, Centauri {1,3,4},
+  Alien {2,3,4}. So enum 4 is a plain two-team round Centauri vs Aliens.
+
+| Enum | Button | Mod short name | Display | Ceiling category |
+|---|---|---|---|---|
+| 1 HUMANS_VS_HUMANS | Cent vs Sol | `HvH` | Humans vs Humans | HvH |
+| 2 HUMANS_VS_ALIENS | Alien vs Sol | `SvA` (old rows: `HvA`) | Sol vs Aliens | HvA |
+| 4 HUMANS2_VS_ALIENS | Alien vs Cent | `CvA` (old rows: `H2vA`) | Centauri vs Aliens | HvA |
+| 3 HUMANS_VS_HUMANS_VS_ALIENS | Sol vs Cent vs Alien | `HvHvA` | 3-way (2v1 on a 2v1 map) | HvHvA |
 
 ## What the mod does
 
@@ -64,17 +84,30 @@ the round's layout (mission `INIT`, `TeamsVersus == NONE`). It lets `NONE` (Rest
    the folders in `UserData/cfg/Spawns` (NarakaCity, CrimsonPeak, GreatErg, RiftBasin, NorthPolarCap, MonumentValley,
    CrystalChasm, WhisperingPlains, TheMaw, Badlands, IndustrialQuarter, BlackIsle, Citadel); matched case- and
    space-insensitively against `NetworkGameServer.GetServerMap()` (fallback: the loaded scene name).
-3. `ceilings` - layout `m` is blocked when `count_m(last window_rounds rounds) >= max_m`, where
-   `max_m = ceiling == 0 ? 0 : max(1, round(ceiling * window_rounds))`. A layout without a ceiling is unlimited; a
-   ceiling of 1.0 or more means no limit. The window covers the last `window_rounds` rounds on any map.
-   Defaults with `window_rounds` 20: HvHvA 4, HvA 10, HvH 6.
+3. `ceilings` - per category (`HvHvA`, `HvA`, `HvH`). A layout is blocked when the count of its category in the last
+   `window_rounds` rounds reaches `max = ceiling == 0 ? 0 : max(1, round(ceiling * window_rounds))`. For **HvA** the
+   count is Sol vs Aliens + Centauri vs Aliens together, and reaching the max blocks both. A category without a
+   ceiling is unlimited; a ceiling of 1.0 or more means no limit. The window covers the last `window_rounds` rounds on
+   any map. Defaults with `window_rounds` 20: HvHvA 4, HvA 10, HvH 6. A `ceilings` key `SvA`, `CvA` or `H2vA` is ignored
+   with a warning (the two alien layouts have no ceiling of their own).
 4. If the ceilings (on top of the blocklists) would leave no layout, the ceiling layer is ignored for that round; the
    blocklists still apply.
 5. If the blocklists alone leave no layout, nothing is filtered that round (a warning is logged).
 
 When the vote result does not count: votes for allowed layouts are tallied, most votes wins, ties are random. With no
-vote for an allowed layout the mod picks at random among the allowed vote-screen layouts (mirrors vanilla's random
-pick). Chat example: `3-way was voted but is not counted this round (ceiling 4/20 reached) - playing Humans vs Aliens.`
+vote for an allowed layout the mod picks at random among the allowed vote-screen layouts (all four buttons, so
+Centauri vs Aliens is in the pool too, unlike vanilla's own 1..3 pick).
+
+Chat lines (prefix `[LAYOUT]`):
+
+- vote open / reminder (only when a layout does not count, or on a 2v1 map):
+  `Layout vote - counted this round: Humans vs Humans, Sol vs Aliens, Centauri vs Aliens. Not counted: 3-way (ceiling 4/20 reached)`
+  - both alien layouts blocked for the same reason are one entry:
+    `Layout vote - counted this round: Humans vs Humans, 3-way. Not counted: Sol + Centauri vs Aliens (ceiling 11/20 reached together)`
+  - one of them: `... Not counted: Centauri vs Aliens (excluded on this map)`
+- replacement: `3-way was voted but is not counted this round (ceiling 4/20 reached) - playing Sol vs Aliens.` /
+  `Centauri vs Aliens was voted but is not counted this round (ceiling 11/20 reached, Sol + Centauri vs Aliens together) - playing Humans vs Humans.`
+- private note to a voter: `Your Sol vs Aliens vote will not be counted this round (ceiling 11/20 reached, Sol + Centauri vs Aliens together). Counted: Humans vs Humans, 3-way.`
 
 ## 2v1 maps
 
@@ -90,7 +123,7 @@ On a map listed in `map_two_vs_one` (default `["IndustrialQuarter"]`, matched li
 - **Ceilings and history.** A 2v1 round is recorded as mode `HvHvA` with `"two_vs_one": true`, so it counts toward the
   HvHvA ceiling. Status, stats and the ModUI page show the 2v1 rounds separately (`HvHvA 4/4 (2v1 1)`).
 - **Chat.** Vote-open line on such a map (sent even when nothing is blocked):
-  `Layout vote - counted this round: Humans vs Humans, Humans vs Aliens, 2v1 (3-way button = Sol+Centauri allied vs Aliens)`.
+  `Layout vote - counted this round: Humans vs Humans, Sol vs Aliens, Centauri vs Aliens, 2v1 (3-way button = Sol+Centauri allied vs Aliens)`.
   A 3-way voter gets `Your 3-way vote counts as 2v1 on IndustrialQuarter: Sol and Centauri allied against the Aliens.`
   When the alliance is in place: `3-way on IndustrialQuarter is played as 2v1: Sol and Centauri are allied against the Aliens.`
 - **Alliance.** The SetTeamVersusMode postfix schedules the request; from the next `OnUpdate` frame on the mod calls
@@ -141,7 +174,7 @@ namespace Si_VersusVote {
     public const int ApiVersion = 2;              // 2 since 0.3.0; every v1 member unchanged
     public static bool TwoVsOneActive { get; }   // see below
     public static string CurrentMap { get; }     // NetworkGameServer.GetServerMap(), fallback last loaded scene
-    public static string LayoutShort { get; }    // "HvH", "HvA", "HvHvA", "2v1", "" (NONE)
+    public static string LayoutShort { get; }    // "HvH", "SvA", "CvA", "HvHvA", "2v1", "" (NONE); before 0.3.1 "HvA" / "H2vA"
     public static bool IsTwoVsOneMap(string map);// listed in map_two_vs_one (case/space-insensitive)
     public static event Action<bool> LayoutDecided; // fired right after the flag is set; argument = twoVsOne
     // v2 (0.3.0)
@@ -182,8 +215,8 @@ that registered `/versus`). The document is cached and rebuilt after a change or
 
 | Who | Shows / does |
 |---|---|
-| everyone | map, counted / not counted this round with reasons, window counts (`last 20: HvHvA 4/4 (2v1 1), HvA 7/10, HvH 5/6`), 2v1 state; table "This round" (layout, counted, reason, count/max), table "All N rounds" (shares, 2v1 row), table "Per-map exclusions", server-wide disabled list + 2v1 maps; buttons Status, Statistics, Help |
-| admins | switches filter / announce / debug; value rows 2v1 lone team start money (x) and starter units (x), window_rounds, ceiling HvHvA (= 2v1), HvA, HvH, vote line delay / repeat; multi-select "Disabled on this server" (HvH / HvA / HvHvA, click toggles); pickers "Exclude a layout on a map" (map:mode), "Remove a map exclusion", "Add a 2v1 map", "Remove a 2v1 map"; buttons All settings, Save config, Reload config, Reset history |
+| everyone | map, counted / not counted this round with reasons, window counts (`last 20: HvHvA 4/6 (2v1 1), HvA 10/11 (Sol 8, Cent 2), HvH 6/7`), 2v1 state; table "This round" (four rows Humans vs Humans, Sol vs Aliens, Centauri vs Aliens, 3-way / 2v1: counted, reason, count/max; the alien rows show their own count plus the shared HvA count, `8 (HvA 10/11)`), table "All N rounds" (HvH, Sol vs Aliens, Centauri vs Aliens, Humans vs Aliens total, HvHvA, of which 2v1), table "Per-map exclusions", server-wide disabled list + 2v1 maps; buttons Status, Statistics, Help |
+| admins | switches filter / announce / debug; value rows 2v1 lone team start money (x) and starter units (x), window_rounds, ceiling HvHvA (= 2v1), ceiling HvA (Sol vs Aliens + Centauri vs Aliens together), ceiling HvH, vote line delay / repeat; multi-select "Disabled on this server" (HvH / HvA / SvA / CvA / HvHvA, click toggles); pickers "Exclude a layout on a map" (map:mode, same five names), "Remove a map exclusion", "Add a 2v1 map", "Remove a 2v1 map"; buttons All settings, Save config, Reload config, Reset history |
 
 **Admin gating** (same as Si_WaspHarvest): rows exported with `admin: true` (`"a": true`) are merged by the ModUI server
 only into frames of players for whom `Player.IsAdmin()` is true; other players never receive them. That is display only.
@@ -196,8 +229,12 @@ only into frames of players for whom `Player.IsAdmin()` is true; other players n
 
 `UserData/cfg/VersusVote/Si_VersusVote_Config.json`, written with defaults on first start; an older file gets the
 missing keys (`map_two_vs_one` from 0.2.0, the `two_vs_one` section from 0.3.0) added on first load. `map_two_vs_one`
-stays a top-level key (unchanged). Mode names: `HvH`, `HvA`, `HvHvA` (also `3way`, `3-way`), `H2vA`, or the enum
-names (`HUMANS_VS_ALIENS` ...). Unknown names are logged and ignored. Live edits (chat or page) rewrite the file.
+stays a top-level key (unchanged). Layout names in `blocked_modes` / `map_blocked_modes`: `HvH`, `HvA` (Sol vs Aliens
+**and** Centauri vs Aliens), `SvA`, `CvA` (also `H2vA`), `HvHvA` (also `3way`, `3-way`), the enum names
+(`HUMANS_VS_ALIENS` / "Humans vs Aliens" = the HvA category, `HUMANS2_VS_ALIENS` = CvA) or 1..4. `ceilings` keys:
+`HvHvA`, `HvA`, `HvH` only. Unknown names are logged and ignored. Live edits (chat or page) rewrite the file; a
+blocklist edited live is written back as canonical names (`HvA` when both alien layouts are blocked, else `SvA` / `CvA`).
+0.3.0 files load unchanged; an `"HvA"` entry in a blocklist now blocks both alien layouts.
 
 Default:
 
@@ -245,12 +282,12 @@ Example with per-map exclusions (no 3-way on the two small maps, HvH never on Ba
 |---|---|
 | `enabled` | false = never touch the vote result (history is still recorded, `!layout` still works, 2v1 still applies) |
 | `announce` | false = no chat output (console log only); command replies still go to the caller |
-| `blocked_modes` | layouts that never count on this server |
+| `blocked_modes` | layouts that never count on this server (`HvA` = both alien layouts) |
 | `map_blocked_modes` | map -> layouts that never count there |
 | `map_two_vs_one` | maps where the 3-way button plays 2v1 (Sol + Centauri allied vs Aliens); empty = no 2v1 |
 | `two_vs_one.lone_start_money_mult` | 2v1: lone team's starting resources x this (1..10, 1 = off), granted once the alliance is confirmed |
 | `two_vs_one.lone_starter_units_mult` | 2v1: Si_StarterUnits multiplies the lone team's starter unit counts by this integer (1..10, 1 = off) |
-| `ceilings` | layout -> max share of the window (0 = never, absent = unlimited); 2v1 rounds count as HvHvA |
+| `ceilings` | category `HvHvA` / `HvA` / `HvH` -> max share of the window (0 = never, absent = unlimited); HvA counts Sol vs Aliens + Centauri vs Aliens together; 2v1 rounds count as HvHvA |
 | `window_rounds` | rounds the ceilings look back over (1..1000) |
 | `history_file` | history path, relative to the config folder unless absolute |
 | `announce_delay_s` | delay of the vote-open line after the vote phase starts (0..60) |
@@ -263,19 +300,21 @@ counted; otherwise the decision is only logged.
 ### History
 
 `history.json` keeps every played round (`utc`, `map`, `mode`, and `two_vs_one: true` for 2v1 rounds) for statistics;
-only the last `window_rounds` entries count toward the ceilings. A round is recorded when the server applies a non-NONE
+only the last `window_rounds` entries count toward the ceilings. `mode` is `HvH`, `SvA`, `CvA` or `HvHvA` since 0.3.1;
+older rows say `HvA` (Sol vs Aliens) or `H2vA` (Centauri vs Aliens) and keep loading. (A downgrade to 0.3.0 would drop
+`SvA` / `CvA` rows on load.) A round is recorded when the server applies a non-NONE
 layout through the vote path (not for `preventSpawning` loads), once per round.
 
 ## Commands (Admin Mod required for commands and private notes; the filter works without it)
 
 | Command | Who | Output |
 |---|---|---|
-| `!layout`, `!versus`, `!versus status` | everyone | counted / not counted this round with reasons; `last 20: HvHvA 4/4, HvA 7/10, HvH 5/6` (count/max, `-` = unlimited); 2v1 line |
-| `!versus stats` | everyone | shares over the whole history (2v1 separately), plus one line per map (top 12) |
+| `!layout`, `!versus`, `!versus status` | everyone | counted / not counted this round with reasons; `last 20: HvHvA 4/6 (2v1 1), HvA 10/11 (Sol 8, Cent 2), HvH 6/7` (count/max per category, `-` = unlimited); 2v1 line |
+| `!versus stats` | everyone | shares over the whole history (`HvH 5 (25%), HvA 8 (40%: Sol 6, Cent 2), HvHvA 7 (35%, 2v1 2)`), plus one line per map (top 12) |
 | `!versus help` | everyone | command list (admin part for admins) |
 | `!versus set` | admin | list every key with value and range |
-| `!versus set <key> <value>` | admin | `enabled`, `announce`, `debug` (on/off), `window_rounds` (1..1000, `+N`/`-N`), `announce_delay_s`, `announce_repeat_s`, `ceiling_hvh` / `ceiling_hva` / `ceiling_hvhva` (0..1, `20%`, `none` = unlimited), `lone_money` (1..10, `x2` works) / `lone_units` (integer 1..10); also `!versus ceiling HvHvA 0.2` |
-| `!versus block <mode> [on\|off]` | admin | toggle / set a server-wide blocked layout |
+| `!versus set <key> <value>` | admin | `enabled`, `announce`, `debug` (on/off), `window_rounds` (1..1000, `+N`/`-N`), `announce_delay_s`, `announce_repeat_s`, `ceiling_hvh` / `ceiling_hva` (Sol vs Aliens + Centauri vs Aliens together) / `ceiling_hvhva` (0..1, `20%`, `none` = unlimited), `lone_money` (1..10, `x2` works) / `lone_units` (integer 1..10); also `!versus ceiling HvHvA 0.2` |
+| `!versus block <mode> [on\|off]` | admin | toggle / set a server-wide blocked layout: `HvH`, `HvA` (both alien layouts), `SvA`, `CvA`, `HvHvA` |
 | `!versus mapblock [list]`, `add <map> <mode>`, `remove <map> [mode]` | admin | per-map exclusions (`<map>:<mode>` also works; `remove <map>` clears the map) |
 | `!versus 2v1 [list]`, `add <map>`, `remove <map>` | admin | 2v1 maps (alias `twovone`) |
 | `!versus save` | admin | write the config file now (every edit already saves) |
@@ -297,6 +336,14 @@ References come from `include\<branch>\` (git-ignored; `include\test` = `Project
 1.0.15 from the dedicated server, `include\default` = `Projects\_silica_refs\default`). `ModUI_Export.cs` is the shared
 Si_ModUI builder (copied from Si_WaspHarvest, Newtonsoft only).
 
+Offline rules check (no game needed; loads the built test-branch DLL and calls the internals by reflection): HvA
+ceiling over both alien layouts, blocklists, ceiling-layer fallback, `H2vA` history rows:
+
+```
+cd tools\RulesCheck
+dotnet run -c Release [-- <path to a history.json>]   # exit code 0 = all checks passed
+```
+
 ## Caveats
 
 - The blocked button stays visible and clickable on the clients (baked into the prefab); players learn from chat that
@@ -307,4 +354,4 @@ Si_ModUI builder (copied from Si_WaspHarvest, Newtonsoft only).
 - 2v1 needs Si_Alliance's `AllianceApi` (added after Si_Alliance 0.2.2). The team names passed are "Sol" and
   "Centauri"; Si_Alliance resolves names / short names case-insensitively.
 - 0.2.0's 2v1 path ran on the local test server on 2026-11-08 (one player, IndustrialQuarter: layout decided, alliance
-  OK after 1 attempt). The 0.3.0 lone-team compensation is not run live yet.
+  OK after 1 attempt). The 0.3.0 lone-team compensation and the 0.3.1 four-button handling are not run live yet.

@@ -12,7 +12,8 @@ namespace Si_VersusVote
     ///                   another mod changes the layout away from HvHvA before the original runs. Never set when
     ///                   Si_Alliance's AllianceApi is not loaded.
     ///   CurrentMap      the server map (NetworkGameServer.GetServerMap(), fallback: last loaded scene).
-    ///   LayoutShort     "HvH", "HvA", "HvHvA", "2v1", "" (NONE); "H2vA" only if something else applies that stub.
+    ///   LayoutShort     "HvH", "SvA" (Sol vs Aliens, enum 2), "CvA" (Centauri vs Aliens, enum 4), "HvHvA", "2v1", "" (NONE).
+    ///                   Before 0.3.1: "HvA" for enum 2 and "H2vA" for enum 4.
     ///   IsTwoVsOneMap   the map is listed in map_two_vs_one (case/space-insensitive).
     ///   LayoutDecided   fired right after the flag is set (argument = twoVsOne); fired again with false if 2v1 is
     ///                   withdrawn later in the same round. Handlers run inside the Harmony prefix: keep them cheap.

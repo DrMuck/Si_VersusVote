@@ -59,9 +59,9 @@ namespace Si_VersusVote
 
         public static string Range(Key k) => k.IsBool ? "on|off" : k.Min.ToString("0.##", Inv) + ".." + k.Max.ToString("0.##", Inv);
 
-        /// <summary>"0.2" or "none" (no ceiling) for the ModUI value row and the listing.</summary>
+        /// <summary>"0.2" or "none" (no ceiling) of m's category, for the ModUI value row and the listing.</summary>
         public static string ShowCeiling(VersusConfig c, GameModeExt.ETeamsVersus m)
-            => c.CeilingOf.TryGetValue(m, out double v) ? v.ToString("0.###", Inv) : "none";
+            => c.CeilingOf.TryGetValue(Modes.Category(m), out double v) ? v.ToString("0.###", Inv) : "none";
 
         static bool TryBool(string raw, out bool on)
         {
@@ -84,9 +84,9 @@ namespace Si_VersusVote
             if (args.Length == 0)
             {
                 outp.Add("Keys: " + string.Join(" | ", Keys.Select(k => k.Name + "=" + Show(k, c) + " (" + Range(k) + ")")));
-                outp.Add("Ceilings: " + string.Join(" | ", Modes.Votable.Select(m => "ceiling_" + Modes.Short(m).ToLowerInvariant() + "=" + ShowCeiling(c, m))) +
-                         " (0..1 share of the window, 'none' = unlimited, '20%' works)");
-                outp.Add("Usage: !versus set <key> <value> | !versus block <mode> | !versus mapblock add|remove <map> <mode> | !versus 2v1 add|remove <map>");
+                outp.Add("Ceilings: " + string.Join(" | ", Modes.Categories.Select(m => "ceiling_" + Modes.CategoryShort(m).ToLowerInvariant() + "=" + ShowCeiling(c, m))) +
+                         " (0..1 share of the window, 'none' = unlimited, '20%' works; hva = Sol vs Aliens + Centauri vs Aliens together)");
+                outp.Add("Usage: !versus set <key> <value> | !versus block <mode> | !versus mapblock add|remove <map> <mode> | !versus 2v1 add|remove <map>. Layouts: " + Modes.NamesHelp);
                 return outp;
             }
             string keyName = args[0].Trim();
@@ -137,8 +137,11 @@ namespace Si_VersusVote
         static string SetCeiling(string who, string modeText, string raw)
         {
             var c = VersusVoteMod.Cfg;
-            if (!Modes.TryParse(modeText, out var m)) return "Unknown layout '" + modeText + "'. Use ceiling_hvh, ceiling_hva or ceiling_hvhva.";
-            if (raw.Length == 0) return "ceiling_" + Modes.Short(m).ToLowerInvariant() + " = " + ShowCeiling(c, m) + " (max " + MaxText(c, m) + "). Value 0..1, 'none' = unlimited.";
+            if (!Modes.TryParseCategory(modeText, out var m))
+                return (Modes.TryParseSet(modeText, out _) ? "Sol vs Aliens and Centauri vs Aliens share one ceiling: use ceiling_hva." : "Unknown layout '" + modeText + "'.") +
+                       " Ceilings: ceiling_hvh, ceiling_hva, ceiling_hvhva.";
+            string name = Modes.CategoryShort(m);
+            if (raw.Length == 0) return "ceiling_" + name.ToLowerInvariant() + " = " + ShowCeiling(c, m) + " (max " + MaxText(c, m) + "). Value 0..1, 'none' = unlimited.";
             double? v;
             string r = raw.Trim().ToLowerInvariant();
             if (r == "none" || r == "off" || r == "-" || r == "unlimited" || r == "no") v = null;
@@ -153,10 +156,11 @@ namespace Si_VersusVote
             }
             string before = ShowCeiling(c, m);
             foreach (var k in c.Ceilings.Keys.ToList())
-                if (Modes.TryParse(k, out var km) && km == m) c.Ceilings.Remove(k);
-            if (v != null) c.Ceilings[Modes.Short(m)] = Math.Round(v.Value, 4);
-            Commit(who, "ceiling " + Modes.Short(m) + ": " + before + " -> " + ShowCeiling(c, m));
-            return "Ceiling " + Modes.Short(m) + ": " + before + " -> " + ShowCeiling(c, m) + " (max " + MaxText(c, m) + "; saved, live).";
+                if (Modes.TryParseCategory(k, out var km) && km == m) c.Ceilings.Remove(k);
+            if (v != null) c.Ceilings[name] = Math.Round(v.Value, 4);
+            Commit(who, "ceiling " + name + ": " + before + " -> " + ShowCeiling(c, m));
+            return "Ceiling " + name + (m == Modes.SvA ? " (Sol + Centauri vs Aliens together)" : "") + ": " + before + " -> " + ShowCeiling(c, m) +
+                   " (max " + MaxText(c, m) + "; saved, live).";
         }
 
         static string MaxText(VersusConfig c, GameModeExt.ETeamsVersus m)
@@ -167,21 +171,25 @@ namespace Si_VersusVote
 
         // ------------------------------------------------------------------ block <mode> [on|off]
 
+        /// <summary>"HvA" = both alien layouts, "SvA" / "CvA" one of them. Without on|off: toggles (blocked = every layout of the name is blocked).</summary>
         public static string Block(string who, string[] args)
         {
             var c = VersusVoteMod.Cfg;
             if (args.Length == 0)
-                return "Disabled on this server: " + (c.Blocked.Count == 0 ? "none" : string.Join(", ", c.Blocked.Select(Modes.Short))) + ". !versus block <mode> [on|off] toggles.";
-            if (!Modes.TryParse(args[0], out var m)) return "Unknown layout '" + args[0] + "' (HvH, HvA, HvHvA).";
-            bool now = c.Blocked.Contains(m);
-            bool want = !now;
-            if (args.Length > 1 && !TryBool(args[1], out want)) return "!versus block " + Modes.Short(m) + " on|off";
-            if (want == now) return Modes.Short(m) + " is already " + (now ? "disabled" : "allowed") + " on this server.";
-            c.BlockedModes.RemoveAll(s => Modes.TryParse(s, out var x) && x == m);
-            if (want) c.BlockedModes.Add(Modes.Short(m));
-            Commit(who, "blocked_modes " + Modes.Short(m) + " -> " + (want ? "blocked" : "allowed"));
-            return Modes.Short(m) + (want ? " is now disabled on this server" : " is allowed again on this server") + " (saved, live)." +
-                   (want && m == GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS && c.TwoVsOneMaps.Count > 0 ? " This also blocks 2v1." : "");
+                return "Disabled on this server: " + (c.Blocked.Count == 0 ? "none" : string.Join(", ", Modes.Tokens(c.Blocked))) + ". !versus block <mode> [on|off] toggles (" + Modes.NamesHelp + ").";
+            if (!Modes.TryParseSet(args[0], out var ms)) return "Unknown layout '" + args[0] + "' (" + Modes.NamesHelp + ").";
+            string name = Modes.Token(ms);
+            bool all = ms.All(c.Blocked.Contains), any = ms.Any(c.Blocked.Contains);
+            bool want = !all;
+            if (args.Length > 1 && !TryBool(args[1], out want)) return "!versus block " + name + " on|off";
+            if (want && all) return name + " is already disabled on this server.";
+            if (!want && !any) return name + " is already allowed on this server.";
+            var set = new HashSet<GameModeExt.ETeamsVersus>(c.Blocked);
+            if (want) set.UnionWith(ms); else set.ExceptWith(ms);
+            c.BlockedModes = Modes.Tokens(set);
+            Commit(who, "blocked_modes " + name + " -> " + (want ? "blocked" : "allowed"));
+            return name + (want ? " is now disabled on this server" : " is allowed again on this server") + " (saved, live)." +
+                   (want && ms.Contains(Modes.ThreeWay) && c.TwoVsOneMaps.Count > 0 ? " This also blocks 2v1." : "");
         }
 
         // ------------------------------------------------------------------ mapblock list|add|remove
@@ -191,7 +199,7 @@ namespace Si_VersusVote
             var c = VersusVoteMod.Cfg;
             string op = args.Length > 0 ? args[0].ToLowerInvariant() : "list";
             if (op == "list" || op == "")
-                return "Per-map exclusions: " + (MapRulesText(c) is string t && t.Length > 0 ? t : "none") + ". !versus mapblock add|remove <map> <mode>";
+                return "Per-map exclusions: " + (MapRulesText(c) is string t && t.Length > 0 ? t : "none") + ". !versus mapblock add|remove <map> <mode> (" + Modes.NamesHelp + ")";
             if (op != "add" && op != "remove" && op != "del" && op != "rm") return "!versus mapblock [list] | add <map> <mode> | remove <map> [mode]";
             bool add = op == "add";
             if (args.Length < 2) return "!versus mapblock " + (add ? "add <map> <mode>" : "remove <map> [mode]") + " (also <map>:<mode>)";
@@ -200,31 +208,35 @@ namespace Si_VersusVote
             int colon = mapText.IndexOf(':');
             if (colon > 0) { modeText = mapText.Substring(colon + 1); mapText = mapText.Substring(0, colon); }
 
-            GameModeExt.ETeamsVersus m = GameModeExt.ETeamsVersus.NONE;
-            if (modeText.Length > 0 && !Modes.TryParse(modeText, out m)) return "Unknown layout '" + modeText + "' (HvH, HvA, HvHvA).";
-            if (add && m == GameModeExt.ETeamsVersus.NONE) return "!versus mapblock add <map> <mode>";
+            var ms = new GameModeExt.ETeamsVersus[0];
+            if (modeText.Length > 0 && !Modes.TryParseSet(modeText, out ms)) return "Unknown layout '" + modeText + "' (" + Modes.NamesHelp + ").";
+            if (add && ms.Length == 0) return "!versus mapblock add <map> <mode>";
+            string name = ms.Length > 0 ? Modes.Token(ms) : "";
 
             string mapKey = Modes.MapKey(mapText);
             if (mapKey.Length == 0) return "No map given.";
             string existingKey = c.MapBlockedModes.Keys.FirstOrDefault(k => Modes.MapKey(k) == mapKey) ?? "";
+            c.MapBlocked.TryGetValue(mapKey, out var parsed);
+            var set = parsed != null ? new HashSet<GameModeExt.ETeamsVersus>(parsed) : new HashSet<GameModeExt.ETeamsVersus>();
 
             if (add)
             {
-                string name = existingKey.Length > 0 ? existingKey : Maps.Canonical(mapText, out _);
-                if (!c.MapBlockedModes.TryGetValue(name, out var list) || list == null) { list = new List<string>(); c.MapBlockedModes[name] = list; }
-                if (list.Any(s => Modes.TryParse(s, out var x) && x == m)) return Modes.Short(m) + " is already excluded on " + name + ".";
-                list.Add(Modes.Short(m));
-                Commit(who, "map_blocked_modes " + name + " + " + Modes.Short(m));
+                string mapName = existingKey.Length > 0 ? existingKey : Maps.Canonical(mapText, out _);
+                if (ms.All(set.Contains)) return name + " is already excluded on " + mapName + ".";
+                set.UnionWith(ms);
+                c.MapBlockedModes[mapName] = Modes.Tokens(set);
+                Commit(who, "map_blocked_modes " + mapName + " + " + name);
                 Maps.Canonical(mapText, out bool known);
-                return Modes.Short(m) + " is now excluded on " + name + " (saved, live)." + (known || existingKey.Length > 0 ? "" : " Note: '" + name + "' is not a map this server knows - check the spelling.");
+                return name + " is now excluded on " + mapName + " (saved, live)." + (known || existingKey.Length > 0 ? "" : " Note: '" + mapName + "' is not a map this server knows - check the spelling.");
             }
             if (existingKey.Length == 0) return "No exclusions for " + mapText + ".";
-            var cur = c.MapBlockedModes[existingKey] ?? new List<string>();
-            if (m == GameModeExt.ETeamsVersus.NONE) cur.Clear();
-            else if (cur.RemoveAll(s => Modes.TryParse(s, out var x) && x == m) == 0) return Modes.Short(m) + " is not excluded on " + existingKey + ".";
-            if (cur.Count == 0) c.MapBlockedModes.Remove(existingKey);
-            Commit(who, "map_blocked_modes " + existingKey + " - " + (m == GameModeExt.ETeamsVersus.NONE ? "all" : Modes.Short(m)));
-            return (m == GameModeExt.ETeamsVersus.NONE ? "All exclusions" : Modes.Short(m) + " exclusion") + " removed on " + existingKey + " (saved, live).";
+            if (ms.Length == 0) set.Clear();
+            else if (!ms.Any(set.Contains)) return name + " is not excluded on " + existingKey + ".";
+            else set.ExceptWith(ms);
+            if (set.Count == 0) c.MapBlockedModes.Remove(existingKey);
+            else c.MapBlockedModes[existingKey] = Modes.Tokens(set);
+            Commit(who, "map_blocked_modes " + existingKey + " - " + (ms.Length == 0 ? "all" : name));
+            return (ms.Length == 0 ? "All exclusions" : name + " exclusion") + " removed on " + existingKey + " (saved, live).";
         }
 
         /// <summary>"NarakaCity: HvHvA; Badlands: HvH" from the parsed config.</summary>

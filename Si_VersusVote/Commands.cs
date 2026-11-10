@@ -72,7 +72,10 @@ namespace Si_VersusVote
                 case "help": case "?":
                     Reply(caller, "!layout | !versus [status] - !versus stats");
                     if (AdminBridge.IsAdmin(caller))
+                    {
                         Reply(caller, "Admin: !versus set [<key> <value>] | block <mode> [on|off] | mapblock [add|remove <map> <mode>] | 2v1 [add|remove <map>] | save | reload | reset");
+                        Reply(caller, "Layouts: HvH, SvA (Sol vs Aliens), CvA (Centauri vs Aliens), HvA (both), HvHvA (3-way). Ceilings: hvh, hva (SvA + CvA together), hvhva.");
+                    }
                     return;
                 case "set": foreach (string line in Edit.Set(who, rest)) Reply(caller, line); return;
                 case "ceiling": foreach (string line in Edit.Set(who, new[] { "ceiling" }.Concat(rest).ToArray())) Reply(caller, line); return;
@@ -107,19 +110,17 @@ namespace Si_VersusVote
             foreach (var g in byMap) Reply(caller, g.Key + " (" + g.Count() + "): " + Shares(g.ToList()));
         }
 
-        /// <summary>"HvH 5 (25%), HvA 8 (40%), HvHvA 7 (35%, 2v1 2)".</summary>
+        /// <summary>"HvH 5 (25%), HvA 8 (40%: Sol 6, Cent 2), HvHvA 7 (35%, 2v1 2)".</summary>
         internal static string Shares(IReadOnlyCollection<RoundEntry> list)
         {
-            var parts = new List<string>();
-            foreach (var m in Modes.All)
-            {
-                int c = list.Count(r => r.Parsed == m);
-                if (c == 0 && m == GameModeExt.ETeamsVersus.HUMANS2_VS_ALIENS) continue;
-                string pct = (100.0 * c / Math.Max(1, list.Count)).ToString("0", CultureInfo.InvariantCulture) + "%";
-                int two = m == GameModeExt.ETeamsVersus.HUMANS_VS_HUMANS_VS_ALIENS ? list.Count(r => r.TwoVsOne) : 0;
-                parts.Add(Modes.Short(m) + " " + c + " (" + pct + (two > 0 ? ", 2v1 " + two : "") + ")");
-            }
-            return string.Join(", ", parts);
+            string Pct(int c) => (100.0 * c / Math.Max(1, list.Count)).ToString("0", CultureInfo.InvariantCulture) + "%";
+            int hvh = list.Count(r => r.Parsed == Modes.HvH);
+            int sol = list.Count(r => r.Parsed == Modes.SvA);
+            int cent = list.Count(r => r.Parsed == Modes.CvA);
+            int three = list.Count(r => r.Parsed == Modes.ThreeWay);
+            int two = list.Count(r => r.TwoVsOne);
+            return "HvH " + hvh + " (" + Pct(hvh) + "), HvA " + (sol + cent) + " (" + Pct(sol + cent) + (sol + cent > 0 ? ": Sol " + sol + ", Cent " + cent : "") +
+                   "), HvHvA " + three + " (" + Pct(three) + (two > 0 ? ", 2v1 " + two : "") + ")";
         }
     }
 }
